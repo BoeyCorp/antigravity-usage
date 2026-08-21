@@ -36,6 +36,20 @@ mkdir -p ~/.local/bin
 ln -sf ~/.config/omarchy/plugins/jesseburlamaque.antigravity-usage/bin/omarchy-agent-usage-antigravity ~/.local/bin/omarchy-agent-usage-antigravity
 ```
 
+## Removal
+
+To remove the plugin from Omarchy:
+
+```sh
+omarchy plugin remove jesseburlamaque.antigravity-usage
+```
+
+If you configured the optional Agents panel integration:
+
+```sh
+rm -f ~/.local/bin/omarchy-agent-usage-antigravity
+```
+
 ## Interactions
 
 - **Left Click**: Open/close popup panel with stats, charts, and recent sessions.

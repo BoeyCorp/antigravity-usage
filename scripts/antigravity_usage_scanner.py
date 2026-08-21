@@ -28,6 +28,18 @@ def date_string(value: dt.date) -> str:
     return value.strftime("%Y-%m-%d")
 
 
+def sanitize_plain_text(val: Any, max_len: int = 250) -> str:
+    """Sanitize arbitrary strings to safe plain-text by stripping control chars and truncating."""
+    if val is None:
+        return ""
+    text = str(val)
+    # Remove null bytes and non-printable control characters
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", "", text)
+    # Collapse whitespace and newlines to a single space
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:max_len]
+
+
 def recent_date_strings() -> list[str]:
     today = dt.datetime.now().date()
     return [date_string(today - dt.timedelta(days=offset)) for offset in range(6, -1, -1)]
@@ -118,15 +130,15 @@ def parse_history_file(history_path: Path, recent_dates: list[str]) -> tuple[dic
                     if day in daily_prompts:
                         daily_prompts[day] += 1
                     
-                    ws = entry.get("workspace")
+                    ws = sanitize_plain_text(entry.get("workspace") or "", 300)
                     if ws:
                         workspace_counter[ws] += 1
 
                     recent_prompts.append({
-                        "display": entry.get("display", ""),
-                        "workspace": ws or "",
-                        "conversationId": entry.get("conversationId", ""),
-                        "type": entry.get("type", "prompt"),
+                        "display": sanitize_plain_text(entry.get("display", ""), 200),
+                        "workspace": ws,
+                        "conversationId": sanitize_plain_text(entry.get("conversationId", ""), 100),
+                        "type": sanitize_plain_text(entry.get("type", "prompt"), 50),
                         "timestamp": ts or 0,
                         "date": day
                     })
@@ -145,8 +157,9 @@ def parse_presence(presence_dir: Path) -> set[str]:
 
     try:
         for p in presence_dir.glob("*.lock"):
-            conv_id = p.stem
-            active_ids.add(conv_id)
+            conv_id = sanitize_plain_text(p.stem, 100)
+            if conv_id:
+                active_ids.add(conv_id)
     except Exception:
         pass
     return active_ids
@@ -165,7 +178,7 @@ def parse_transcripts(brain_dir: Path) -> tuple[Counter, dict[str, dict[str, Any
         transcript_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
 
         for p in transcript_files:
-            conv_id = p.parent.parent.parent.name
+            conv_id = sanitize_plain_text(p.parent.parent.parent.name, 100)
             current_model = "Gemini 3.7 Flash"
             try:
                 with open(p, "r", encoding="utf-8", errors="replace") as f:
@@ -184,7 +197,7 @@ def parse_transcripts(brain_dir: Path) -> tuple[Counter, dict[str, dict[str, Any
                         if "Model Selection" in content:
                             match = re.search(r"Model Selection` from .*? to (.+?)\.\s*(?:No need|$)", content)
                             if match:
-                                m = match.group(1).strip().replace("`", "")
+                                m = sanitize_plain_text(match.group(1).strip().replace("`", ""), 80)
                                 if m and len(m) < 60 and not m.lower().startswith("comment"):
                                     current_model = m
                                     if latest_model == "Gemini 3.7 Flash":
@@ -208,6 +221,7 @@ def parse_transcripts(brain_dir: Path) -> tuple[Counter, dict[str, dict[str, Any
                             fn_name = ""
                             if isinstance(tc, dict):
                                 fn_name = tc.get("function", {}).get("name") or tc.get("name") or ""
+                            fn_name = sanitize_plain_text(fn_name, 80)
                             if fn_name:
                                 tool_counter[fn_name] += 1
             except Exception:
@@ -218,8 +232,9 @@ def parse_transcripts(brain_dir: Path) -> tuple[Counter, dict[str, dict[str, Any
     # Convert sets to counts and sort models
     formatted_models: dict[str, dict[str, Any]] = {}
     for m, data in sorted(models_stats.items(), key=lambda item: item[1]["prompts"] + item[1]["steps"], reverse=True):
-        formatted_models[m] = {
-            "name": m,
+        clean_model_name = sanitize_plain_text(m, 80)
+        formatted_models[clean_model_name] = {
+            "name": clean_model_name,
             "prompts": data["prompts"],
             "steps": data["steps"],
             "sessions": len(data["sessions"]),
@@ -307,17 +322,25 @@ def scan(base_dir: Path) -> dict[str, Any]:
                 except Exception:
                     workspace = ws_raw
 
+                clean_cid = sanitize_plain_text(c_id, 100)
+                clean_title = sanitize_plain_text(row["title"] or (f"Session {clean_cid[:8]}" if clean_cid else "Session"), 150)
+                clean_preview = sanitize_plain_text(row["preview"] or "", 250)
+                clean_ws = sanitize_plain_text(workspace, 300)
+                clean_ws_name = sanitize_plain_text(Path(workspace).name if workspace else "", 100)
+                clean_status = sanitize_plain_text("active" if is_active else (row["status"] or "idle"), 40)
+                clean_agent_name = sanitize_plain_text(row["agent_name"] or "Antigravity", 80)
+
                 session_item = {
-                    "conversationId": c_id,
-                    "title": row["title"] or (f"Session {c_id[:8]}" if c_id else "Session"),
-                    "preview": row["preview"] or "",
+                    "conversationId": clean_cid,
+                    "title": clean_title,
+                    "preview": clean_preview,
                     "stepCount": step_count,
                     "lastModified": last_mod,
                     "date": mod_day,
-                    "workspace": workspace,
-                    "workspaceName": Path(workspace).name if workspace else "",
-                    "status": "active" if is_active else (row["status"] or "idle"),
-                    "agentName": row["agent_name"] or "Antigravity",
+                    "workspace": clean_ws,
+                    "workspaceName": clean_ws_name,
+                    "status": clean_status,
+                    "agentName": clean_agent_name,
                     "notFullyIdle": bool(row["not_fully_idle"]),
                     "killed": bool(row["killed"]),
                     "isActive": is_active
@@ -410,12 +433,14 @@ def scan(base_dir: Path) -> dict[str, Any]:
 
     # 7. Workspaces list (sorted by frequency)
     recent_workspaces = [
-        {"path": ws, "name": Path(ws).name, "count": count}
+        {"path": sanitize_plain_text(ws, 300), "name": sanitize_plain_text(Path(ws).name, 100), "count": count}
         for ws, count in ws_counter.most_common(5)
     ]
 
     # Tools usage dict
-    tools_dict = dict(tool_counter.most_common(10))
+    tools_dict = {sanitize_plain_text(k, 80): v for k, v in tool_counter.most_common(10)}
+
+    clean_latest_model = sanitize_plain_text(latest_model, 80)
 
     return {
         "schemaVersion": 1,
@@ -427,7 +452,7 @@ def scan(base_dir: Path) -> dict[str, Any]:
         "hasActiveSession": has_active_session,
         "hasLocalStats": True,
         "tierLabel": "Google DeepMind",
-        "currentModel": latest_model,
+        "currentModel": clean_latest_model,
         "todayPrompts": daily_prompts.get(today_str, 0),
         "todaySessions": today_db_sessions or (1 if has_active_session else 0),
         "todaySteps": today_db_steps,
@@ -444,7 +469,7 @@ def scan(base_dir: Path) -> dict[str, Any]:
         "limits": limits,
         "recentWorkspaces": recent_workspaces,
         "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "usageStatusText": f"{active_status} • {latest_model}",
+        "usageStatusText": f"{active_status} • {clean_latest_model}",
         "authHelpText": ""
     }
 

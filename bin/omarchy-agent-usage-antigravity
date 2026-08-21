@@ -33,6 +33,18 @@ def date_string(value: dt.date) -> str:
     return value.strftime("%Y-%m-%d")
 
 
+def sanitize_plain_text(val: Any, max_len: int = 250) -> str:
+    """Sanitize arbitrary strings to safe plain-text by stripping control chars and truncating."""
+    if val is None:
+        return ""
+    text = str(val)
+    # Remove null bytes and non-printable control characters
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", "", text)
+    # Collapse whitespace and newlines to a single space
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:max_len]
+
+
 def recent_date_strings() -> list[str]:
     today = dt.datetime.now().date()
     return [date_string(today - dt.timedelta(days=offset)) for offset in range(6, -1, -1)]
@@ -150,16 +162,17 @@ def collect(base_dir: Path) -> dict[str, Any]:
                             if "Model Selection" in content:
                                 match = re.search(r"Model Selection` from .*? to (.+?)\.\s*(?:No need|$)", content)
                                 if match:
-                                    m = match.group(1).strip().replace("`", "")
+                                    m = sanitize_plain_text(match.group(1).strip().replace("`", ""), 80)
                                     if m and len(m) < 60 and not m.lower().startswith("comment"):
                                         current_model = m
                                         if latest_model == "Gemini 3.7 Flash":
                                             latest_model = m
-                            if current_model not in models_stats:
-                                models_stats[current_model] = {"prompts": 0, "steps": 0}
-                            models_stats[current_model]["steps"] += 1
+                            clean_model_key = sanitize_plain_text(current_model, 80)
+                            if clean_model_key not in models_stats:
+                                models_stats[clean_model_key] = {"prompts": 0, "steps": 0}
+                            models_stats[clean_model_key]["steps"] += 1
                             if step.get("type") == "USER_INPUT":
-                                models_stats[current_model]["prompts"] += 1
+                                models_stats[clean_model_key]["prompts"] += 1
                 except Exception:
                     continue
         except Exception:
@@ -191,7 +204,8 @@ def collect(base_dir: Path) -> dict[str, Any]:
     # Format model usage
     models_dict = {}
     for m, data in sorted(models_stats.items(), key=lambda item: item[1]["prompts"] + item[1]["steps"], reverse=True):
-        models_dict[m] = {
+        clean_name = sanitize_plain_text(m, 80)
+        models_dict[clean_name] = {
             "inputTokens": 0,
             "outputTokens": 0,
             "cacheReadInputTokens": 0,

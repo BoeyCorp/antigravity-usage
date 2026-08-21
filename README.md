@@ -23,21 +23,11 @@ Antigravity active session monitor, prompt metrics, tool telemetry, and 7-day us
 
 ## Installation
 
-### 1. Install Plugin
-
 ```sh
 omarchy plugin add https://github.com/jesseburlamaque/antigravity-usage.git --enable
 ```
 
-### 2. Add to Bar Layout
-
-Place the widget in your bar layout (suggested: `right` or `center` section):
-
-```sh
-omarchy bar put jesseburlamaque.antigravity-usage --section right
-```
-
-### 3. (Optional) Native `omarchy.agents` Panel Integration
+### (Optional) Native `omarchy.agents` Panel Integration
 
 To also include Antigravity as a tab inside Omarchy's built-in Agents panel:
 

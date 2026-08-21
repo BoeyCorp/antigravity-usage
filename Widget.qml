@@ -337,6 +337,7 @@ BarWidget {
             spacing: 8
 
             Text {
+              textFormat: Text.PlainText
               visible: !root.settingsMode && (!root.provider || !root.provider.hasLocalStats)
               Layout.fillWidth: true
               Layout.topMargin: 24
@@ -392,6 +393,7 @@ BarWidget {
         spacing: 6
 
         Text {
+          textFormat: Text.PlainText
           text: "Google Antigravity"
           color: foreground
           font.family: fontFamily
@@ -410,6 +412,7 @@ BarWidget {
 
           Text {
             id: activeLabel
+            textFormat: Text.PlainText
             text: root.activeStatus
             color: "#FFFFFF"
             font.family: fontFamily
@@ -421,6 +424,7 @@ BarWidget {
       }
 
       Text {
+        textFormat: Text.PlainText
         text: provider ? (provider.currentModel || "Gemini 3.7 Flash") : ""
         color: dim
         font.family: fontFamily
@@ -472,6 +476,7 @@ BarWidget {
     spacing: 8
 
     Text {
+      textFormat: Text.PlainText
       text: "Antigravity Settings"
       color: foreground
       font.family: fontFamily
@@ -568,6 +573,7 @@ BarWidget {
             spacing: 6
 
             Text {
+              textFormat: Text.PlainText
               text: modelData.groupName || modelData.title || "Group"
               color: foreground
               font.family: fontFamily
@@ -578,6 +584,7 @@ BarWidget {
             }
 
             Text {
+              textFormat: Text.PlainText
               text: root.formatCountdown(modelData.resetsAt)
               color: dim
               font.family: fontFamily
@@ -611,6 +618,7 @@ BarWidget {
             spacing: 6
 
             Text {
+              textFormat: Text.PlainText
               text: (modelData.used || 0) + " of " + (modelData.allowance || 0) + " prompts used"
               color: dim
               font.family: fontFamily
@@ -619,6 +627,7 @@ BarWidget {
             }
 
             Text {
+              textFormat: Text.PlainText
               text: Math.round(Number(modelData.percent || 0) * 100) + "%"
               color: Number(modelData.percent || 0) >= 0.90 ? (bar ? bar.urgent : Color.urgent) : foreground
               font.family: fontFamily
@@ -673,6 +682,7 @@ BarWidget {
             spacing: 6
 
             Text {
+              textFormat: Text.PlainText
               text: modelData.name
               color: foreground
               font.family: fontFamily
@@ -683,6 +693,7 @@ BarWidget {
             }
 
             Text {
+              textFormat: Text.PlainText
               text: {
                 var p = Number(modelData.data.prompts || 0)
                 var s = Number(modelData.data.steps || 0)
@@ -746,6 +757,7 @@ BarWidget {
           }
 
           Text {
+            textFormat: Text.PlainText
             text: {
               var d = modelData.date
               if (!d) return ""
@@ -778,6 +790,7 @@ BarWidget {
           }
 
           Text {
+            textFormat: Text.PlainText
             text: count + " prompts"
             color: foreground
             font.family: fontFamily
@@ -819,6 +832,7 @@ BarWidget {
           spacing: 4
 
           Text {
+            textFormat: Text.PlainText
             text: modelData.name
             color: dim
             font.family: fontFamily
@@ -827,6 +841,7 @@ BarWidget {
             Layout.fillWidth: true
           }
           Text {
+            textFormat: Text.PlainText
             text: String(modelData.count)
             color: foreground
             font.family: fontFamily
@@ -859,6 +874,7 @@ BarWidget {
             spacing: 6
 
             Text {
+              textFormat: Text.PlainText
               text: modelData.preview || modelData.title || "Session"
               color: foreground
               font.family: fontFamily
@@ -876,6 +892,7 @@ BarWidget {
 
               Text {
                 id: sText
+                textFormat: Text.PlainText
                 text: modelData.isActive ? "ACTIVE" : "IDLE"
                 color: modelData.isActive ? "#FFFFFF" : dim
                 font.family: fontFamily
@@ -891,6 +908,7 @@ BarWidget {
             spacing: 6
 
             Text {
+              textFormat: Text.PlainText
               text: modelData.workspaceName || "Workspace"
               color: dim
               font.family: fontFamily
@@ -898,8 +916,9 @@ BarWidget {
               elide: Text.ElideRight
               Layout.fillWidth: true
             }
-            Text { text: "·"; color: dim; font.pixelSize: 9 }
+            Text { textFormat: Text.PlainText; text: "·"; color: dim; font.pixelSize: 9 }
             Text {
+              textFormat: Text.PlainText
               text: modelData.stepCount + " steps"
               color: dim
               font.family: fontFamily
@@ -923,6 +942,7 @@ BarWidget {
     spacing: 8
 
     Text {
+      textFormat: Text.PlainText
       Layout.fillWidth: true
       text: "j/k scroll · r refresh · s settings · esc close"
       color: dim
@@ -975,6 +995,7 @@ BarWidget {
           spacing: 8
 
           Text {
+            textFormat: Text.PlainText
             Layout.fillWidth: true
             text: "Show prompt count badge in bar"
             color: foreground
@@ -991,6 +1012,7 @@ BarWidget {
     }
 
     Text {
+      textFormat: Text.PlainText
       visible: root.settingsStatusText !== ""
       Layout.fillWidth: true
       text: root.settingsStatusText
@@ -1001,6 +1023,7 @@ BarWidget {
     }
 
     Text {
+      textFormat: Text.PlainText
       Layout.fillWidth: true
       text: "s saves · esc closes"
       color: dim
@@ -1045,6 +1068,7 @@ BarWidget {
         fontSize: 11
       }
       Text {
+        textFormat: Text.PlainText
         visible: section.subtitle !== ""
         Layout.fillWidth: true
         text: section.subtitle
@@ -1064,6 +1088,7 @@ BarWidget {
     Layout.alignment: Qt.AlignHCenter
 
     Text {
+      textFormat: Text.PlainText
       text: value
       color: foreground
       font.family: fontFamily
@@ -1073,6 +1098,7 @@ BarWidget {
       Layout.fillWidth: true
     }
     Text {
+      textFormat: Text.PlainText
       text: label
       color: dim
       font.family: fontFamily

@@ -1,0 +1,295 @@
+#!/usr/bin/python3
+# omarchy:summary=Print the Antigravity usage record as JSON
+# omarchy:args=[--force] [--limits-only]
+# omarchy:hidden=true
+"""Collect Antigravity usage into one display-ready JSON record for Omarchy.
+
+Emits the record contract expected by omarchy-agent-usage-update and the
+omarchy.agents bar panel.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import os
+import re
+import sqlite3
+import sys
+from collections import Counter
+from pathlib import Path
+from typing import Any
+
+AGENT_ID = "antigravity"
+AGENT_NAME = "Antigravity"
+
+
+def default_base_dir() -> Path:
+    return Path(os.environ.get("ANTIGRAVITY_DATA_DIR") or os.path.expanduser("~/.gemini/antigravity-cli"))
+
+
+def date_string(value: dt.date) -> str:
+    return value.strftime("%Y-%m-%d")
+
+
+def recent_date_strings() -> list[str]:
+    today = dt.datetime.now().date()
+    return [date_string(today - dt.timedelta(days=offset)) for offset in range(6, -1, -1)]
+
+
+def local_date_from_timestamp(value: Any) -> str:
+    if value is None:
+        return date_string(dt.datetime.now().date())
+    if isinstance(value, (int, float)):
+        try:
+            seconds = float(value) / 1000.0 if float(value) > 10_000_000_000 else float(value)
+            return date_string(dt.datetime.fromtimestamp(seconds).date())
+        except Exception:
+            return date_string(dt.datetime.now().date())
+    raw = str(value).strip()
+    if not raw:
+        return date_string(dt.datetime.now().date())
+    try:
+        parsed = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone()
+        return date_string(parsed.date())
+    except Exception:
+        pass
+    try:
+        clean = raw.split(".")[0]
+        parsed = dt.datetime.fromisoformat(clean)
+        return date_string(parsed.date())
+    except Exception:
+        return date_string(dt.datetime.now().date())
+
+
+def collect(base_dir: Path) -> dict[str, Any]:
+    today_date = dt.datetime.now().date()
+    today_str = date_string(today_date)
+    recent_dates = recent_date_strings()
+
+    if not base_dir.exists():
+        return {
+            "schemaVersion": 1,
+            "id": AGENT_ID,
+            "name": AGENT_NAME,
+            "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "ready": False,
+            "hasLocalStats": False,
+            "todayPrompts": 0,
+            "todaySessions": 0,
+            "todayTotalTokens": 0,
+            "todayTokensByModel": {},
+            "recentDays": [{"date": d, "messageCount": 0} for d in recent_dates],
+            "totalPrompts": 0,
+            "totalSessions": 0,
+            "activeDays": 0,
+            "activeDates": [],
+            "modelUsage": {},
+            "limits": [],
+            "tierLabel": "Google DeepMind",
+            "usageStatusText": "No Antigravity installation found",
+            "authHelpText": "Run `agy` to initialize."
+        }
+
+    db_path = base_dir / "conversation_summaries.db"
+    history_path = base_dir / "history.jsonl"
+    presence_dir = base_dir / "presence"
+    brain_dir = base_dir / "brain"
+
+    # Presence
+    active_locks = list(presence_dir.glob("*.lock")) if presence_dir.exists() else []
+    has_active_locks = len(active_locks) > 0
+
+    # History Prompts
+    daily_prompts = {day: 0 for day in recent_dates}
+    all_dates = set()
+    total_prompts = 0
+
+    if history_path.exists():
+        try:
+            with open(history_path, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        total_prompts += 1
+                        ts = entry.get("timestamp")
+                        day = local_date_from_timestamp(ts)
+                        all_dates.add(day)
+                        if day in daily_prompts:
+                            daily_prompts[day] += 1
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+    # Transcripts for models
+    models_stats: dict[str, dict[str, Any]] = {}
+    latest_model = "Gemini 3.7 Flash"
+    if brain_dir.exists():
+        try:
+            transcript_files = list(brain_dir.glob("*/.system_generated/logs/transcript.jsonl"))
+            for p in transcript_files:
+                current_model = "Gemini 3.7 Flash"
+                try:
+                    with open(p, "r", encoding="utf-8", errors="replace") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                step = json.loads(line)
+                            except Exception:
+                                continue
+                            content = step.get("content") or ""
+                            if "Model Selection" in content:
+                                match = re.search(r"Model Selection` from .*? to (.+?)\.\s*(?:No need|$)", content)
+                                if match:
+                                    m = match.group(1).strip().replace("`", "")
+                                    if m and len(m) < 60 and not m.lower().startswith("comment"):
+                                        current_model = m
+                                        if latest_model == "Gemini 3.7 Flash":
+                                            latest_model = m
+                            if current_model not in models_stats:
+                                models_stats[current_model] = {"prompts": 0, "steps": 0}
+                            models_stats[current_model]["steps"] += 1
+                            if step.get("type") == "USER_INPUT":
+                                models_stats[current_model]["prompts"] += 1
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    # SQLite
+    total_sessions = 0
+    today_sessions = 0
+    not_fully_idle = False
+    if db_path.exists():
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True, timeout=5)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT conversation_id, last_modified_time, not_fully_idle FROM conversation_summaries")
+            for row in cursor:
+                total_sessions += 1
+                mod_day = local_date_from_timestamp(row["last_modified_time"])
+                if mod_day and mod_day.startswith("20"):
+                    all_dates.add(mod_day)
+                if mod_day == today_str:
+                    today_sessions += 1
+                if bool(row["not_fully_idle"]):
+                    not_fully_idle = True
+            conn.close()
+        except Exception:
+            pass
+
+    # Format model usage
+    models_dict = {}
+    for m, data in sorted(models_stats.items(), key=lambda item: item[1]["prompts"] + item[1]["steps"], reverse=True):
+        models_dict[m] = {
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0,
+            "prompts": data["prompts"],
+            "steps": data["steps"]
+        }
+
+    # Limits calculation by model group
+    now_utc = dt.datetime.now(dt.timezone.utc)
+    next_midnight_utc = (now_utc + dt.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    session_reset_utc = now_utc + dt.timedelta(hours=5)
+
+    flash_count = 0
+    thinking_count = 0
+    claude_count = 0
+
+    for m_name, m_data in models_stats.items():
+        m_lower = m_name.lower()
+        p_cnt = int(m_data.get("prompts", 0))
+        if "claude" in m_lower:
+            claude_count += p_cnt
+        elif "high" in m_lower or "thinking" in m_lower or "pro" in m_lower:
+            thinking_count += p_cnt
+        else:
+            flash_count += p_cnt
+
+    limits = [
+        {
+            "group": "flash",
+            "groupName": "Gemini Flash Series",
+            "title": "Flash Models Quota",
+            "icon": "",
+            "color": "#38BDF8",
+            "used": flash_count,
+            "allowance": 200,
+            "percent": min(1.0, round(flash_count / 200.0, 3)),
+            "resetsAt": next_midnight_utc.isoformat()
+        },
+        {
+            "group": "thinking",
+            "groupName": "Gemini Thinking Series",
+            "title": "Thinking Models Quota",
+            "icon": "",
+            "color": "#A855F7",
+            "used": thinking_count,
+            "allowance": 100,
+            "percent": min(1.0, round(thinking_count / 100.0, 3)),
+            "resetsAt": next_midnight_utc.isoformat()
+        },
+        {
+            "group": "claude",
+            "groupName": "Claude Series",
+            "title": "Claude 5h Session Window",
+            "icon": "",
+            "color": "#D97757",
+            "used": claude_count,
+            "allowance": 50,
+            "percent": min(1.0, round(claude_count / 50.0, 3)),
+            "resetsAt": session_reset_utc.isoformat()
+        }
+    ]
+
+    status_text = "Working" if not_fully_idle else ("Active" if has_active_locks else "Ready")
+
+    return {
+        "schemaVersion": 1,
+        "id": AGENT_ID,
+        "name": AGENT_NAME,
+        "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "ready": True,
+        "hasLocalStats": True,
+        "todayPrompts": daily_prompts.get(today_str, 0),
+        "todaySessions": today_sessions or (1 if has_active_locks else 0),
+        "todayTotalTokens": 0,
+        "todayTokensByModel": {},
+        "recentDays": [{"date": d, "messageCount": daily_prompts.get(d, 0), "prompts": daily_prompts.get(d, 0)} for d in recent_dates],
+        "totalPrompts": total_prompts,
+        "totalSessions": total_sessions,
+        "activeDays": len(all_dates),
+        "activeDates": sorted(list(all_dates)),
+        "modelUsage": models_dict,
+        "limits": limits,
+        "tierLabel": "Google DeepMind",
+        "usageStatusText": status_text,
+        "authHelpText": ""
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Antigravity Usage Collector for Omarchy")
+    parser.add_argument("--force", action="store_true", help="Ignored for compatibility")
+    parser.add_argument("--limits-only", action="store_true", help="Ignored for compatibility")
+    args = parser.parse_args()
+
+    record = collect(default_base_dir())
+    print(json.dumps(record, indent=2, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()

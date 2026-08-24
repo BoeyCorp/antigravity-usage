@@ -128,7 +128,9 @@ BarWidget {
   }
 
   function iconSource() {
-    return Qt.resolvedUrl("assets/antigravity.svg")
+    var c = Color.background
+    var light = (0.299 * c.r + 0.587 * c.g + 0.114 * c.b) > 0.5
+    return Qt.resolvedUrl(light ? "assets/antigravity-light.svg" : "assets/antigravity.svg")
   }
 
   function formatCountdown(resetsAt) {

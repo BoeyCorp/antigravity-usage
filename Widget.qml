@@ -127,10 +127,18 @@ BarWidget {
     draftSettings = next
   }
 
-  function iconSource() {
-    var c = Color.background
-    var light = (0.299 * c.r + 0.587 * c.g + 0.114 * c.b) > 0.5
-    return Qt.resolvedUrl(light ? "assets/antigravity-light.svg" : "assets/antigravity.svg")
+  readonly property bool isLightTheme: {
+    var fg = root.foreground
+    var bg = (bar && bar.background) ? bar.background : Color.background
+    var fgLum = 0.299 * fg.r + 0.587 * fg.g + 0.114 * fg.b
+    var bgLum = 0.299 * bg.r + 0.587 * bg.g + 0.114 * bg.b
+    return bgLum > 0.5 || fgLum < 0.5
+  }
+
+  readonly property url iconSource: Qt.resolvedUrl(isLightTheme ? "assets/antigravity-light.svg" : "assets/antigravity.svg")
+
+  function getIconSource() {
+    return root.iconSource
   }
 
   function formatCountdown(resetsAt) {
@@ -211,7 +219,7 @@ BarWidget {
       anchors.centerIn: parent
 
       Image {
-        source: root.iconSource()
+        source: root.iconSource
         width: 12
         height: 12
         sourceSize.width: 12
@@ -377,7 +385,7 @@ BarWidget {
     spacing: 8
 
     Image {
-      source: root.iconSource()
+      source: root.iconSource
       Layout.preferredWidth: 18
       Layout.preferredHeight: 18
       sourceSize.width: 18

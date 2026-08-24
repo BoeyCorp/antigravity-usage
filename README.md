@@ -25,6 +25,7 @@ Antigravity active session monitor, prompt metrics, tool telemetry, and 7-day us
 
 ```sh
 omarchy plugin add https://github.com/jesseburlamaque/antigravity-usage.git --enable
+omarchy restart shell
 ```
 
 ### (Optional) Native `omarchy.agents` Panel Integration
@@ -36,12 +37,20 @@ mkdir -p ~/.local/bin
 ln -sf ~/.config/omarchy/plugins/jesseburlamaque.antigravity-usage/bin/omarchy-agent-usage-antigravity ~/.local/bin/omarchy-agent-usage-antigravity
 ```
 
+## Update
+
+```sh
+omarchy plugin update jesseburlamaque.antigravity-usage --yes
+omarchy restart shell
+```
+
 ## Removal
 
 To remove the plugin from Omarchy:
 
 ```sh
 omarchy plugin remove jesseburlamaque.antigravity-usage
+omarchy restart shell
 ```
 
 If you configured the optional Agents panel integration:

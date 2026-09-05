@@ -95,7 +95,12 @@ BarWidget {
     if (scannerPath) {
       try {
         Quickshell.execDetached(["python3", scannerPath, "--kill", conversationId])
-        Qt.callLater(function() { root.triggerRefresh() })
+        root.triggerRefresh()
+        var t = Qt.createQmlObject('import QtQuick 2.15; Timer { interval: 350; repeat: false; running: true }', root)
+        t.triggered.connect(function() {
+          root.triggerRefresh()
+          t.destroy()
+        })
       } catch (e) {
         console.warn("antigravity-usage/kill", e)
       }
@@ -1007,7 +1012,8 @@ BarWidget {
             Layout.fillWidth: true
             implicitHeight: sessionCol.implicitHeight + 8
             radius: 4
-            color: sessionMouseArea.containsMouse ? root.cardHover : "transparent"
+            readonly property bool isHovered: sessionMouseArea.containsMouse || killMouse.containsMouse
+            color: isHovered ? root.cardHover : "transparent"
 
             Behavior on color { ColorAnimation { duration: 120 } }
 
@@ -1033,7 +1039,7 @@ BarWidget {
                   visible: index < 5
                   textFormat: Text.PlainText
                   text: "[" + (index + 1) + "]"
-                  color: sessionMouseArea.containsMouse ? root.accent : root.dim
+                  color: sessionItemCard.isHovered ? root.accent : root.dim
                   font.family: fontFamily
                   font.pixelSize: 9
                   font.bold: true
@@ -1042,7 +1048,7 @@ BarWidget {
                 Text {
                   textFormat: Text.PlainText
                   text: modelData.preview || modelData.title || "Session"
-                  color: sessionMouseArea.containsMouse ? root.accent : root.foreground
+                  color: sessionItemCard.isHovered ? root.accent : root.foreground
                   font.family: fontFamily
                   font.pixelSize: 11
                   font.bold: true
@@ -1054,11 +1060,13 @@ BarWidget {
                   spacing: 4
 
                   Rectangle {
-                    visible: modelData.isActive && sessionMouseArea.containsMouse
+                    visible: !!modelData.isActive
                     radius: 3
                     color: killMouse.containsMouse ? root.urgent : root.track
                     Layout.preferredHeight: 14
                     Layout.preferredWidth: 14
+
+                    Behavior on color { ColorAnimation { duration: 80 } }
 
                     Text {
                       textFormat: Text.PlainText
@@ -1075,18 +1083,11 @@ BarWidget {
                       anchors.fill: parent
                       hoverEnabled: true
                       cursorShape: Qt.PointingHandCursor
-                      onClicked: root.killSession(modelData.conversationId)
+                      onClicked: function(mouse) {
+                        mouse.accepted = true
+                        root.killSession(modelData.conversationId)
+                      }
                     }
-                  }
-
-                  Text {
-                    visible: sessionMouseArea.containsMouse
-                    textFormat: Text.PlainText
-                    text: " resume"
-                    color: root.accent
-                    font.family: fontFamily
-                    font.pixelSize: 9
-                    font.bold: true
                   }
 
                   Rectangle {

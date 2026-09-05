@@ -17,11 +17,11 @@ BarWidget {
   property bool refreshFlash: false
   property double nowMs: Date.now()
 
-  readonly property color foreground: bar ? bar.foreground : Color.foreground
-  readonly property color background: Color.popups.background
-  readonly property color border: Color.popups.border
-  readonly property color urgent: bar ? bar.urgent : Color.urgent
-  readonly property color accent: bar ? bar.accent : Color.accent
+  readonly property color foreground: (bar && bar.foreground) ? bar.foreground : (Color.foreground || "#D8DEE9")
+  readonly property color background: (Color.popups && Color.popups.background) ? Color.popups.background : "#1E1E2E"
+  readonly property color border: (Color.popups && Color.popups.border) ? Color.popups.border : "#313244"
+  readonly property color urgent: (bar && bar.urgent) ? bar.urgent : (Color.urgent || "#F38BA8")
+  readonly property color accent: (bar && bar.accent) ? bar.accent : (Color.accent || "#89B4FA")
   readonly property color dim: Qt.darker(foreground, 1.45)
   readonly property color card: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.055)
   readonly property color cardHover: Qt.rgba(foreground.r, foreground.g, foreground.b, 0.085)
@@ -772,27 +772,154 @@ BarWidget {
   }
 
   component ModelUsageCard: SectionCard {
+    id: modelCardRoot
     property var provider: null
+    property string timeRange: "today" // "today" | "week" | "all"
     visible: !!provider && ((provider.modelList && provider.modelList.length > 0) || (provider.modelUsage && Object.keys(provider.modelUsage).length > 0))
     title: "Model Usage Breakdown"
+
+    headerAccessory: Component {
+      Rectangle {
+        color: root.track
+        radius: 3
+        implicitHeight: 18
+        implicitWidth: toggleRow.implicitWidth + 4
+        border.color: root.outline
+        border.width: 1
+
+        RowLayout {
+          id: toggleRow
+          anchors.centerIn: parent
+          spacing: 1
+
+          Repeater {
+            model: [
+              { key: "today", label: "Today" },
+              { key: "week", label: "Last 7 Days" },
+              { key: "all", label: "All time" }
+            ]
+
+            delegate: Rectangle {
+              required property var modelData
+              readonly property bool isSelected: modelCardRoot.timeRange === modelData.key
+              radius: 2
+              implicitHeight: 14
+              implicitWidth: optText.implicitWidth + 8
+              color: isSelected ? root.accent : (optMouse.containsMouse ? root.cardHover : "transparent")
+
+              Behavior on color { ColorAnimation { duration: 100 } }
+
+              Text {
+                id: optText
+                anchors.centerIn: parent
+                textFormat: Text.PlainText
+                text: modelData.label
+                color: isSelected ? "#FFFFFF" : (optMouse.containsMouse ? root.foreground : root.dim)
+                font.family: root.fontFamily
+                font.pixelSize: 9
+                font.bold: isSelected
+              }
+
+              MouseArea {
+                id: optMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: modelCardRoot.timeRange = modelData.key
+              }
+            }
+          }
+        }
+      }
+    }
+
+    readonly property var rawModelList: {
+      if (provider && provider.modelList && provider.modelList.length > 0)
+        return provider.modelList
+      var usage = provider ? (provider.modelUsage || {}) : {}
+      var res = []
+      for (var k in usage) res.push(usage[k])
+      return res
+    }
+
+    function getPrompts(m, range) {
+      if (!m) return 0
+      if (range === "today") return Number(m.todayPrompts || 0)
+      if (range === "week") return Number(m.weekPrompts || 0)
+      return Number(m.prompts || 0)
+    }
+
+    function getSteps(m, range) {
+      if (!m) return 0
+      if (range === "today") return Number(m.todaySteps || 0)
+      if (range === "week") return Number(m.weekSteps || 0)
+      return Number(m.steps || 0)
+    }
+
+    readonly property real totalPromptsForRange: {
+      var list = rawModelList
+      var sum = 0
+      for (var i = 0; i < list.length; i++) {
+        sum += getPrompts(list[i], timeRange)
+      }
+      return sum
+    }
+
+    readonly property real totalStepsForRange: {
+      var list = rawModelList
+      var sum = 0
+      for (var i = 0; i < list.length; i++) {
+        sum += getSteps(list[i], timeRange)
+      }
+      return sum
+    }
+
+    readonly property var displayModelList: {
+      var list = rawModelList.slice()
+      list.sort(function(a, b) {
+        var aP = getPrompts(a, timeRange)
+        var bP = getPrompts(b, timeRange)
+        var aS = getSteps(a, timeRange)
+        var bS = getSteps(b, timeRange)
+        var aScore = aP * 10000 + aS
+        var bScore = bP * 10000 + bS
+        if (bScore !== aScore) return bScore - aScore
+        return (Number(b.prompts || 0)) - (Number(a.prompts || 0))
+      })
+      return list
+    }
 
     ColumnLayout {
       width: parent.width
       spacing: 6
 
+      Text {
+        visible: modelCardRoot.totalPromptsForRange === 0 && modelCardRoot.totalStepsForRange === 0
+        textFormat: Text.PlainText
+        text: modelCardRoot.timeRange === "today"
+          ? "No prompts recorded yet today"
+          : (modelCardRoot.timeRange === "week" ? "No prompts recorded in the last 7 days" : "No model activity recorded")
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: 9
+        Layout.alignment: Qt.AlignHCenter
+        Layout.topMargin: 2
+        Layout.bottomMargin: 2
+      }
+
       Repeater {
-        model: {
-          if (provider && provider.modelList && provider.modelList.length > 0)
-            return provider.modelList
-          var usage = provider ? (provider.modelUsage || {}) : {}
-          var res = []
-          for (var k in usage) res.push(usage[k])
-          return res
-        }
+        model: modelCardRoot.displayModelList
         delegate: ColumnLayout {
           required property var modelData
           Layout.fillWidth: true
           spacing: 2
+
+          readonly property int pCount: modelCardRoot.getPrompts(modelData, modelCardRoot.timeRange)
+          readonly property int sCount: modelCardRoot.getSteps(modelData, modelCardRoot.timeRange)
+          readonly property real shareFrac: modelCardRoot.totalPromptsForRange > 0
+            ? (pCount / modelCardRoot.totalPromptsForRange)
+            : (modelCardRoot.totalStepsForRange > 0 ? (sCount / modelCardRoot.totalStepsForRange) : 0)
+          readonly property real sharePct: Math.round(shareFrac * 100)
 
           RowLayout {
             Layout.fillWidth: true
@@ -812,14 +939,20 @@ BarWidget {
             Text {
               textFormat: Text.PlainText
               text: {
-                var p = Number(modelData.prompts || 0)
-                var tp = Number(modelData.todayPrompts || 0)
-                var s = Number(modelData.steps || 0)
+                var p = pCount
+                var s = sCount
                 var sFmt = s >= 1000 ? (s / 1000).toFixed(1) + "k" : String(s)
-                if (tp > 0) {
-                  return tp + " today (" + p + " total) · " + sFmt + " steps"
+                if (modelCardRoot.timeRange === "all") {
+                  var tp = Number(modelData.todayPrompts || 0)
+                  if (tp > 0) {
+                    return tp + " today (" + p + " total) · " + sFmt + " steps"
+                  }
+                  return p + " prompts · " + sFmt + " steps"
+                } else if (modelCardRoot.timeRange === "today") {
+                  return p + " prompts · " + sFmt + " steps"
+                } else {
+                  return p + " prompts · " + sFmt + " steps in 7d"
                 }
-                return p + " prompts · " + sFmt + " steps"
               }
               color: root.dim
               font.family: root.fontFamily
@@ -828,8 +961,8 @@ BarWidget {
 
             Text {
               textFormat: Text.PlainText
-              text: Math.round(Number(modelData.sharePercent || 0)) + "%"
-              color: root.dim
+              text: (modelCardRoot.totalPromptsForRange > 0 || modelCardRoot.totalStepsForRange > 0) ? (sharePct + "%") : "0%"
+              color: pCount > 0 ? root.foreground : root.dim
               font.family: root.fontFamily
               font.pixelSize: 9
               font.bold: true
@@ -843,16 +976,14 @@ BarWidget {
             radius: 2
             clip: true
 
-            readonly property real shareFrac: Math.min(1.0, Math.max(0.0, Number(modelData.shareFraction || 0)))
-
             Rectangle {
               anchors.left: parent.left
               anchors.top: parent.top
               anchors.bottom: parent.bottom
-              width: parent.width * parent.shareFrac
+              width: parent.width * Math.min(1.0, Math.max(0.0, shareFrac))
               color: modelData.color || ((modelData.name || "").indexOf("Claude") !== -1 ? "#D97757" : root.accent)
               radius: 2
-              Behavior on width { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+              Behavior on width { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
             }
           }
         }
@@ -1280,6 +1411,7 @@ BarWidget {
     property string title: ""
     property string subtitle: ""
     property color titleColor: foreground
+    property Component headerAccessory: null
     default property alias content: body.data
 
     Layout.fillWidth: true
@@ -1301,14 +1433,27 @@ BarWidget {
       anchors.leftMargin: section.contentLeftInset
       spacing: 6
 
-      PanelSectionHeader {
-        visible: section.title !== ""
+      RowLayout {
+        visible: section.title !== "" || section.headerAccessory !== null
         Layout.fillWidth: true
-        text: section.title
-        foreground: section.titleColor
-        fontFamily: root.fontFamily
-        fontSize: 11
+        spacing: 6
+
+        PanelSectionHeader {
+          visible: section.title !== ""
+          Layout.fillWidth: true
+          text: section.title
+          foreground: section.titleColor
+          fontFamily: root.fontFamily
+          fontSize: 11
+        }
+
+        Loader {
+          sourceComponent: section.headerAccessory
+          visible: !!section.headerAccessory
+          Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
+        }
       }
+
       Text {
         textFormat: Text.PlainText
         visible: section.subtitle !== ""

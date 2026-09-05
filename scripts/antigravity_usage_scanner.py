@@ -264,13 +264,15 @@ def check_session_working(cid: str, base_dir: Path) -> bool:
     return False
 
 
-def parse_transcripts(brain_dir: Path, today_str: str = "") -> tuple[Counter, dict[str, dict[str, Any]], list[dict[str, Any]], str]:
+def parse_transcripts(brain_dir: Path, today_str: str = "", recent_dates: list[str] | None = None) -> tuple[Counter, dict[str, dict[str, Any]], list[dict[str, Any]], str]:
     tool_counter: Counter = Counter()
     models_stats: dict[str, dict[str, Any]] = {}
     latest_model = "Gemini 3.7 Flash"
 
     if not brain_dir.exists():
         return tool_counter, models_stats, [], latest_model
+
+    recent_dates_set = set(recent_dates) if recent_dates else set()
 
     try:
         transcript_files = list(brain_dir.glob("*/.system_generated/logs/transcript.jsonl"))
@@ -294,7 +296,8 @@ def parse_transcripts(brain_dir: Path, today_str: str = "") -> tuple[Counter, di
                         created_at = step.get("created_at") or ""
                         step_day = local_date_from_timestamp(created_at)
                         is_today = (step_day == today_str) if today_str else False
-                        
+                        is_week = (step_day in recent_dates_set) if recent_dates_set else False
+
                         # Model detection
                         if "Model Selection" in content:
                             match = re.search(r"Model Selection` from .*? to (.+?)\.\s*(?:No need|$)", content)
@@ -312,19 +315,31 @@ def parse_transcripts(brain_dir: Path, today_str: str = "") -> tuple[Counter, di
                                 "steps": 0,
                                 "todayPrompts": 0,
                                 "todaySteps": 0,
-                                "sessions": set()
+                                "weekPrompts": 0,
+                                "weekSteps": 0,
+                                "sessions": set(),
+                                "todaySessions": set(),
+                                "weekSessions": set()
                             }
 
                         models_stats[current_model]["steps"] += 1
                         if is_today:
                             models_stats[current_model]["todaySteps"] += 1
+                        if is_week:
+                            models_stats[current_model]["weekSteps"] += 1
 
                         if step.get("type") == "USER_INPUT":
                             models_stats[current_model]["prompts"] += 1
                             if is_today:
                                 models_stats[current_model]["todayPrompts"] += 1
+                            if is_week:
+                                models_stats[current_model]["weekPrompts"] += 1
 
                         models_stats[current_model]["sessions"].add(conv_id)
+                        if is_today:
+                            models_stats[current_model]["todaySessions"].add(conv_id)
+                        if is_week:
+                            models_stats[current_model]["weekSessions"].add(conv_id)
 
                         # Tool call detection
                         for tc in step.get("tool_calls", []):
@@ -367,6 +382,10 @@ def parse_transcripts(brain_dir: Path, today_str: str = "") -> tuple[Counter, di
             "steps": s_count,
             "todayPrompts": data.get("todayPrompts", 0),
             "todaySteps": data.get("todaySteps", 0),
+            "todaySessions": len(data.get("todaySessions", set())),
+            "weekPrompts": data.get("weekPrompts", 0),
+            "weekSteps": data.get("weekSteps", 0),
+            "weekSessions": len(data.get("weekSessions", set())),
             "sessions": len(data["sessions"]),
             "shareFraction": share_frac,
             "sharePercent": share_pct,
@@ -562,7 +581,7 @@ def scan(base_dir: Path, force: bool = False) -> dict[str, Any]:
     daily_prompts, total_prompts_hist, recent_prompts, ws_counter = parse_history_file(history_path, recent_dates)
 
     # 3. Parse Transcripts for Tool Calls, Models & Model List
-    tool_counter, model_usage_dict, model_list, latest_model = parse_transcripts(brain_dir, today_str)
+    tool_counter, model_usage_dict, model_list, latest_model = parse_transcripts(brain_dir, today_str, recent_dates)
 
     # 4. Fetch real quota data from agy CLI /usage
     raw_quota = fetch_agy_usage_quota(base_dir, force=force)

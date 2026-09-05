@@ -64,6 +64,21 @@ BarWidget {
     usageMain.refreshAll(true)
   }
 
+  function resumeSession(conversationId, workspacePath) {
+    if (!conversationId) return
+    var ws = workspacePath || ""
+    if (ws.indexOf("file://") === 0) ws = decodeURIComponent(ws.substring(7))
+    var args = ["xdg-terminal-exec"]
+    if (ws) args.push("--dir=" + ws)
+    args.push("--", "agy", "--conversation", conversationId)
+    try {
+      Quickshell.execDetached(["uwsm-app", "--"].concat(args))
+    } catch (e) {
+      Quickshell.execDetached(args)
+    }
+    root.close()
+  }
+
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }
   function alpha(c, a) { return Qt.rgba(c.r, c.g, c.b, a) }
 
@@ -884,6 +899,7 @@ BarWidget {
     property var provider: null
     visible: !!provider && provider.recentSessions && provider.recentSessions.length > 0
     title: "Recent Sessions"
+    subtitle: "Click to resume in terminal"
 
     ColumnLayout {
       width: parent.width
@@ -893,63 +909,103 @@ BarWidget {
         model: provider ? (provider.recentSessions || []).slice(0, 3) : []
         delegate: ColumnLayout {
           required property var modelData
+          required property int index
           Layout.fillWidth: true
           spacing: 2
 
-          RowLayout {
+          Rectangle {
+            id: sessionItemCard
             Layout.fillWidth: true
-            spacing: 6
+            implicitHeight: sessionCol.implicitHeight + 8
+            radius: 4
+            color: sessionMouseArea.containsMouse ? root.cardHover : "transparent"
 
-            Text {
-              textFormat: Text.PlainText
-              text: modelData.preview || modelData.title || "Session"
-              color: foreground
-              font.family: fontFamily
-              font.pixelSize: 11
-              font.bold: true
-              elide: Text.ElideRight
-              Layout.fillWidth: true
+            Behavior on color { ColorAnimation { duration: 120 } }
+
+            MouseArea {
+              id: sessionMouseArea
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.resumeSession(modelData.conversationId, modelData.workspace)
             }
 
-            Rectangle {
-              color: modelData.isActive ? "#10B981" : track
-              radius: 3
-              Layout.preferredHeight: 14
-              Layout.preferredWidth: sText.implicitWidth + 6
+            ColumnLayout {
+              id: sessionCol
+              anchors.fill: parent
+              anchors.margins: 4
+              spacing: 3
 
-              Text {
-                id: sText
-                textFormat: Text.PlainText
-                text: modelData.isActive ? "ACTIVE" : "IDLE"
-                color: modelData.isActive ? "#FFFFFF" : dim
-                font.family: fontFamily
-                font.pixelSize: 8
-                font.bold: true
-                anchors.centerIn: parent
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: modelData.preview || modelData.title || "Session"
+                  color: sessionMouseArea.containsMouse ? root.accent : root.foreground
+                  font.family: fontFamily
+                  font.pixelSize: 11
+                  font.bold: true
+                  elide: Text.ElideRight
+                  Layout.fillWidth: true
+                }
+
+                RowLayout {
+                  spacing: 4
+
+                  Text {
+                    visible: sessionMouseArea.containsMouse
+                    textFormat: Text.PlainText
+                    text: " resume"
+                    color: root.accent
+                    font.family: fontFamily
+                    font.pixelSize: 9
+                    font.bold: true
+                  }
+
+                  Rectangle {
+                    color: modelData.isActive ? "#10B981" : root.track
+                    radius: 3
+                    Layout.preferredHeight: 14
+                    Layout.preferredWidth: sText.implicitWidth + 6
+
+                    Text {
+                      id: sText
+                      textFormat: Text.PlainText
+                      text: modelData.isActive ? "ACTIVE" : "IDLE"
+                      color: modelData.isActive ? "#FFFFFF" : root.dim
+                      font.family: fontFamily
+                      font.pixelSize: 8
+                      font.bold: true
+                      anchors.centerIn: parent
+                    }
+                  }
+                }
               }
-            }
-          }
 
-          RowLayout {
-            Layout.fillWidth: true
-            spacing: 6
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
 
-            Text {
-              textFormat: Text.PlainText
-              text: modelData.workspaceName || "Workspace"
-              color: dim
-              font.family: fontFamily
-              font.pixelSize: 9
-              elide: Text.ElideRight
-              Layout.fillWidth: true
-            }
-            Text { textFormat: Text.PlainText; text: "·"; color: dim; font.pixelSize: 9 }
-            Text {
-              textFormat: Text.PlainText
-              text: modelData.stepCount + " steps"
-              color: dim
-              font.family: fontFamily
-              font.pixelSize: 9
+                Text {
+                  textFormat: Text.PlainText
+                  text: modelData.workspaceName || "Workspace"
+                  color: root.dim
+                  font.family: fontFamily
+                  font.pixelSize: 9
+                  elide: Text.ElideRight
+                  Layout.fillWidth: true
+                }
+                Text { textFormat: Text.PlainText; text: "·"; color: root.dim; font.pixelSize: 9 }
+                Text {
+                  textFormat: Text.PlainText
+                  text: modelData.stepCount + " steps"
+                  color: root.dim
+                  font.family: fontFamily
+                  font.pixelSize: 9
+                }
+              }
             }
           }
 

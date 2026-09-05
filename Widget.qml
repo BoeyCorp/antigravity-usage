@@ -79,6 +79,38 @@ BarWidget {
     root.close()
   }
 
+  function newSession() {
+    var args = ["xdg-terminal-exec", "--", "agy"]
+    try {
+      Quickshell.execDetached(["uwsm-app", "--"].concat(args))
+    } catch (e) {
+      Quickshell.execDetached(args)
+    }
+    root.close()
+  }
+
+  function killSession(conversationId) {
+    if (!conversationId) return
+    var scannerPath = root.provider ? root.provider.scannerScriptPath : ""
+    if (scannerPath) {
+      try {
+        Quickshell.execDetached(["python3", scannerPath, "--kill", conversationId])
+        Qt.callLater(function() { root.triggerRefresh() })
+      } catch (e) {
+        console.warn("antigravity-usage/kill", e)
+      }
+    }
+  }
+
+  function formatExactResetTime(resetsAt) {
+    if (!resetsAt) return ""
+    try {
+      var d = new Date(resetsAt)
+      if (isNaN(d.getTime())) return ""
+      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    } catch (e) { return "" }
+  }
+
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }
   function alpha(c, a) { return Qt.rgba(c.r, c.g, c.b, a) }
 
@@ -224,42 +256,62 @@ BarWidget {
     id: chip
 
     readonly property bool tooltipHovered: mouseArea.containsMouse
+    readonly property bool showBadge: (root.settings && root.settings.showBadge !== false)
+    readonly property int promptCount: provider ? (provider.todayPrompts || 0) : 0
+    readonly property bool hasBadge: showBadge && promptCount > 0
 
-    width: root.barSize
+    width: hasBadge ? (13 + badgeText.implicitWidth + 10) : root.barSize
     height: root.barSize
 
-    Item {
-      width: 13
-      height: 13
+    RowLayout {
       anchors.centerIn: parent
+      spacing: 4
 
-      Image {
-        source: root.iconSource
-        width: 12
-        height: 12
-        sourceSize.width: 12
-        sourceSize.height: 12
-        fillMode: Image.PreserveAspectFit
-        anchors.centerIn: parent
+      Item {
+        id: iconBox
+        width: 13
+        height: 13
+
+        Image {
+          source: root.iconSource
+          width: 12
+          height: 12
+          sourceSize.width: 12
+          sourceSize.height: 12
+          fillMode: Image.PreserveAspectFit
+          anchors.centerIn: parent
+        }
+
+        // Active pulse glow
+        Rectangle {
+          width: 4
+          height: 4
+          radius: 2
+          anchors.right: parent.right
+          anchors.bottom: parent.bottom
+          anchors.margins: -1
+          color: root.isWorking ? "#10B981" : (root.isWaiting ? "#3B82F6" : "transparent")
+          visible: root.hasActiveSession
+
+          SequentialAnimation on opacity {
+            running: root.isWorking
+            loops: Animation.Infinite
+            NumberAnimation { from: 0.3; to: 1.0; duration: 600; easing.type: Easing.InOutQuad }
+            NumberAnimation { from: 1.0; to: 0.3; duration: 600; easing.type: Easing.InOutQuad }
+          }
+        }
       }
 
-      // Active pulse glow
-      Rectangle {
-        width: 4
-        height: 4
-        radius: 2
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        anchors.margins: -1
-        color: root.isWorking ? "#10B981" : (root.isWaiting ? "#3B82F6" : "transparent")
-        visible: root.hasActiveSession
-
-        SequentialAnimation on opacity {
-          running: root.isWorking
-          loops: Animation.Infinite
-          NumberAnimation { from: 0.3; to: 1.0; duration: 600; easing.type: Easing.InOutQuad }
-          NumberAnimation { from: 1.0; to: 0.3; duration: 600; easing.type: Easing.InOutQuad }
-        }
+      Text {
+        id: badgeText
+        visible: chip.hasBadge
+        textFormat: Text.PlainText
+        text: String(chip.promptCount)
+        color: root.isWorking ? "#10B981" : root.dim
+        font.family: root.fontFamily
+        font.pixelSize: 9
+        font.bold: true
+        Layout.alignment: Qt.AlignVCenter
       }
     }
 
@@ -296,10 +348,11 @@ BarWidget {
   Item {
     id: button
     anchors.fill: parent
-    implicitWidth: root.barSize
+    implicitWidth: usageChip.width
     implicitHeight: root.barSize
 
     UsageChip {
+      id: usageChip
       anchors.centerIn: parent
     }
   }
@@ -326,7 +379,17 @@ BarWidget {
       onCloseRequested: root.close()
       onTextKey: function(t) {
         if (t === "r" || t === "R") root.triggerRefresh()
-        if (t === "s" || t === "S") root.settingsMode ? root.saveSettings() : root.openSettings()
+        else if (t === "s" || t === "S") root.settingsMode ? root.saveSettings() : root.openSettings()
+        else if (t === "n" || t === "N") { if (!root.settingsMode) root.newSession() }
+        else if (t === "q" || t === "Q") root.close()
+        else if (!root.settingsMode && t >= "1" && t <= "5") {
+          var idx = parseInt(t) - 1
+          var list = root.provider ? (root.provider.recentSessions || []) : []
+          if (idx >= 0 && idx < list.length) {
+            var s = list[idx]
+            root.resumeSession(s.conversationId, s.workspace)
+          }
+        }
       }
 
       ColumnLayout {
@@ -463,6 +526,19 @@ BarWidget {
     RowLayout {
       spacing: 4
       Layout.alignment: Qt.AlignVCenter
+
+      Button {
+        text: ""
+        foreground: root.foreground
+        tooltipText: "New session (n)"
+        tooltipBackground: root.background
+        tooltipForeground: root.foreground
+        fontFamily: root.fontFamily
+        fontSize: 11
+        horizontalPadding: 6
+        verticalPadding: 4
+        onClicked: root.newSession()
+      }
 
       Button {
         text: (root.refreshFlash || usageMain.refreshing) ? "" : ""
@@ -638,7 +714,11 @@ BarWidget {
 
                 Text {
                   textFormat: Text.PlainText
-                  text: root.formatCountdown(modelData.resetTime || modelData.reset_time)
+                  readonly property string exact: root.formatExactResetTime(modelData.resetTime || modelData.reset_time)
+                  text: {
+                    var cd = root.formatCountdown(modelData.resetTime || modelData.reset_time)
+                    return exact ? (cd + " · " + exact) : cd
+                  }
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: 9
@@ -728,8 +808,12 @@ BarWidget {
               textFormat: Text.PlainText
               text: {
                 var p = Number(modelData.prompts || 0)
+                var tp = Number(modelData.todayPrompts || 0)
                 var s = Number(modelData.steps || 0)
                 var sFmt = s >= 1000 ? (s / 1000).toFixed(1) + "k" : String(s)
+                if (tp > 0) {
+                  return tp + " today (" + p + " total) · " + sFmt + " steps"
+                }
                 return p + " prompts · " + sFmt + " steps"
               }
               color: root.dim
@@ -772,10 +856,21 @@ BarWidget {
   }
 
   component WeekCard: SectionCard {
+    id: weekCardRoot
     property var provider: null
     visible: !!provider && provider.recentDays && provider.recentDays.length > 0
                && provider.recentDays.some(function(d) { return d.messageCount > 0 })
     title: "Last 7 Days Activity"
+
+    readonly property real maxCount: {
+      var days = provider ? (provider.recentDays || []) : []
+      var m = 1
+      for (var i = 0; i < days.length; i++) {
+        var val = Number(days[i].messageCount || days[i].prompts || 0)
+        if (val > m) m = val
+      }
+      return m
+    }
 
     ColumnLayout {
       width: parent.width
@@ -788,15 +883,6 @@ BarWidget {
           Layout.fillWidth: true
           spacing: 6
           readonly property real count: modelData ? Number(modelData.messageCount || modelData.prompts || 0) : 0
-          readonly property real maxCount: {
-            var days = provider ? (provider.recentDays || []) : []
-            var max = 1
-            for (var i = 0; i < days.length; i++) {
-              var val = Number(days[i].messageCount || days[i].prompts || 0)
-              if (val > max) max = val
-            }
-            return max
-          }
 
           Text {
             textFormat: Text.PlainText
@@ -824,7 +910,7 @@ BarWidget {
               anchors.left: parent.left
               anchors.top: parent.top
               anchors.bottom: parent.bottom
-              width: parent.width * (count / maxCount)
+              width: parent.width * (count / weekCardRoot.maxCount)
               color: root.alpha(foreground, 0.78)
               radius: 2
               Behavior on width { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
@@ -896,17 +982,20 @@ BarWidget {
   }
 
   component RecentSessionsCard: SectionCard {
+    id: recentSessionsCardRoot
     property var provider: null
+    property bool expanded: false
     visible: !!provider && provider.recentSessions && provider.recentSessions.length > 0
     title: "Recent Sessions"
-    subtitle: "Click to resume in terminal"
+    subtitle: "Click or press 1-" + Math.min(5, (provider ? (provider.recentSessions || []).length : 0)) + " to resume"
 
     ColumnLayout {
       width: parent.width
       spacing: 6
 
       Repeater {
-        model: provider ? (provider.recentSessions || []).slice(0, 3) : []
+        id: sessionRepeater
+        model: provider ? (provider.recentSessions || []).slice(0, recentSessionsCardRoot.expanded ? 10 : 5) : []
         delegate: ColumnLayout {
           required property var modelData
           required property int index
@@ -941,6 +1030,16 @@ BarWidget {
                 spacing: 6
 
                 Text {
+                  visible: index < 5
+                  textFormat: Text.PlainText
+                  text: "[" + (index + 1) + "]"
+                  color: sessionMouseArea.containsMouse ? root.accent : root.dim
+                  font.family: fontFamily
+                  font.pixelSize: 9
+                  font.bold: true
+                }
+
+                Text {
                   textFormat: Text.PlainText
                   text: modelData.preview || modelData.title || "Session"
                   color: sessionMouseArea.containsMouse ? root.accent : root.foreground
@@ -953,6 +1052,32 @@ BarWidget {
 
                 RowLayout {
                   spacing: 4
+
+                  Rectangle {
+                    visible: modelData.isActive && sessionMouseArea.containsMouse
+                    radius: 3
+                    color: killMouse.containsMouse ? root.urgent : root.track
+                    Layout.preferredHeight: 14
+                    Layout.preferredWidth: 14
+
+                    Text {
+                      textFormat: Text.PlainText
+                      text: ""
+                      color: "#FFFFFF"
+                      font.family: fontFamily
+                      font.pixelSize: 8
+                      font.bold: true
+                      anchors.centerIn: parent
+                    }
+
+                    MouseArea {
+                      id: killMouse
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: root.killSession(modelData.conversationId)
+                    }
+                  }
 
                   Text {
                     visible: sessionMouseArea.containsMouse
@@ -988,15 +1113,24 @@ BarWidget {
                 Layout.fillWidth: true
                 spacing: 6
 
-                Text {
-                  textFormat: Text.PlainText
-                  text: modelData.workspaceName || "Workspace"
-                  color: root.dim
-                  font.family: fontFamily
-                  font.pixelSize: 9
-                  elide: Text.ElideRight
-                  Layout.fillWidth: true
+                Rectangle {
+                  color: root.track
+                  radius: 2
+                  Layout.preferredHeight: 14
+                  Layout.preferredWidth: wsText.implicitWidth + 8
+
+                  Text {
+                    id: wsText
+                    textFormat: Text.PlainText
+                    text: " " + (modelData.workspaceName || "Workspace")
+                    color: root.foreground
+                    font.family: fontFamily
+                    font.pixelSize: 8
+                    font.bold: true
+                    anchors.centerIn: parent
+                  }
                 }
+
                 Text { textFormat: Text.PlainText; text: "·"; color: root.dim; font.pixelSize: 9 }
                 Text {
                   textFormat: Text.PlainText
@@ -1013,8 +1147,32 @@ BarWidget {
             Layout.fillWidth: true
             foreground: root.foreground
             strength: 0.12
-            visible: index < 2
+            visible: index < (sessionRepeater.count - 1)
           }
+        }
+      }
+
+      Item {
+        visible: !!provider && provider.recentSessions && provider.recentSessions.length > 5
+        Layout.fillWidth: true
+        implicitHeight: 18
+
+        Text {
+          anchors.centerIn: parent
+          textFormat: Text.PlainText
+          text: recentSessionsCardRoot.expanded ? "Show fewer sessions ▴" : ("Show all sessions (" + provider.recentSessions.length + ") ▾")
+          color: moreMouse.containsMouse ? root.accent : root.dim
+          font.family: fontFamily
+          font.pixelSize: 9
+          font.bold: true
+        }
+
+        MouseArea {
+          id: moreMouse
+          anchors.fill: parent
+          hoverEnabled: true
+          cursorShape: Qt.PointingHandCursor
+          onClicked: recentSessionsCardRoot.expanded = !recentSessionsCardRoot.expanded
         }
       }
     }
@@ -1027,7 +1185,7 @@ BarWidget {
     Text {
       textFormat: Text.PlainText
       Layout.fillWidth: true
-      text: "j/k scroll · r refresh · s settings · esc close"
+      text: "j/k scroll · 1-5 resume · n new · r refresh · s settings · q/esc close"
       color: dim
       font.family: fontFamily
       font.pixelSize: 10

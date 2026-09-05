@@ -68,10 +68,24 @@ rm -f ~/.local/bin/omarchy-agent-usage-antigravity
 - **Left Click**: Open/close popup panel with stats, charts, and recent sessions.
 - **Middle Click**: Force immediate refresh of telemetry and quota data.
 - **Right Click**: Open in-popup settings view.
-- **Keyboard Shortcuts**:
-  - `Esc`: Close popup.
+- **Keyboard Shortcuts** (when popup is open):
+  - `1`–`5`: Quick-resume the corresponding recent session directly in your terminal.
+  - `n`: Start a brand-new `agy` session in your terminal.
   - `r`: Force refresh live quota and usage data.
   - `s`: Toggle between Stats and Settings view.
+  - `q` or `Esc`: Close popup.
+- **Session Management**:
+  - **Quick Resume**: Click any session card or press its `[1]`–`[5]` numeric shortcut to open it in terminal (`agy --conversation <id>`).
+  - **Kill Active Process**: Hover over an active session and click the red `` button to terminate the session process cleanly (`SIGTERM`).
+  - **Expand / Collapse**: Click "Show all sessions" to view up to 10 recent sessions with workspace pill tags.
+
+## Features
+
+- **Status Bar Icon & Live Badge**: Color-coded pulse dot indicating session status (green = active/working, blue = waiting for input) and optional prompt counter badge.
+- **Adaptive Polling**: Auto-scales refresh frequency from 60s idle down to 3s when an active session is working, then returns to 60s when idle.
+- **Exact Reset Times**: Displays both relative countdowns (e.g. `2h 15m`) and exact local wall-clock reset times (e.g. `04:15 AM`).
+- **Desktop Quota Alerts**: Proactive desktop notification alerts when any quota bucket drops below 15% remaining (with intelligent 2-hour per-bucket rate-limiting).
+- **System-Wide Agent Usage Integration**: Fully compatible with Omarchy's `omarchy-agent-usage-antigravity` provider contract (`--limits-only`).
 
 ## Configuration
 
@@ -79,7 +93,7 @@ Configuration lives in `~/.config/omarchy/shell.json`.
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `refreshIntervalSec` | integer (10–1800) | `60` | Telemetry refresh rate in seconds |
+| `refreshIntervalSec` | integer (10–1800) | `60` | Telemetry refresh rate in seconds (adaptive to 3s while active) |
 | `showBadge` | boolean | `true` | Show prompt count badge in the bar widget |
 
 ## License

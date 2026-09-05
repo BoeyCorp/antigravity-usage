@@ -156,12 +156,13 @@ def parse_history_file(history_path: Path, recent_dates: list[str]) -> tuple[dic
     return daily_prompts, total_prompts, recent_prompts, workspace_counter
 
 
-def parse_presence(presence_dir: Path) -> set[str]:
+def parse_presence(presence_dir: Path, prune_stale: bool = True) -> set[str]:
     """Return set of conversation IDs whose presence locks are actively held by running processes."""
     active_ids = set()
     if not presence_dir.exists():
         return active_ids
 
+    now = time.time()
     for p in presence_dir.glob("*.lock"):
         cid = sanitize_plain_text(p.stem, 100)
         if not cid:
@@ -172,12 +173,55 @@ def parse_presence(presence_dir: Path) -> set[str]:
                     fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                     # Succeeded in acquiring exclusive lock: no active process holds it (stale file)
                     fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    # Prune stale locks older than 48 hours to keep directory clean
+                    if prune_stale and (now - p.stat().st_mtime > 48 * 3600):
+                        try:
+                            p.unlink(missing_ok=True)
+                        except Exception:
+                            pass
                 except (BlockingIOError, PermissionError, OSError):
                     # Lock is actively held by a running agy process!
                     active_ids.add(cid)
         except Exception:
             pass
     return active_ids
+
+
+def kill_session(cid: str, base_dir: Path) -> bool:
+    """Find process holding lock for conversationId and terminate it cleanly."""
+    import signal
+    pids = set()
+    target_lock = f"presence/{cid}.lock"
+    for fd_path in glob.glob("/proc/[0-9]*/fd/*"):
+        try:
+            target = os.readlink(fd_path)
+            if target_lock in target:
+                p = int(fd_path.split("/")[2])
+                if p != os.getpid():
+                    pids.add(p)
+        except Exception:
+            pass
+
+    killed_any = False
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            killed_any = True
+        except Exception:
+            pass
+
+    # Clean up lock file if now released
+    lock_file = base_dir / "presence" / f"{cid}.lock"
+    if lock_file.exists():
+        try:
+            with open(lock_file, "rb") as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            lock_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    return killed_any
 
 
 def check_session_working(cid: str, base_dir: Path) -> bool:
@@ -782,7 +826,7 @@ def scan(base_dir: Path, force: bool = False) -> dict[str, Any]:
         "totalSessions": total_db_sessions,
         "totalSteps": total_db_steps,
         "activeSessions": active_sessions,
-        "recentSessions": all_sessions[:6],
+        "recentSessions": all_sessions[:10],
         "toolUsage": tools_dict,
         "modelUsage": model_usage_dict,
         "modelList": model_list,
@@ -795,14 +839,24 @@ def scan(base_dir: Path, force: bool = False) -> dict[str, Any]:
     }
 
 
+scan_antigravity = scan
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Antigravity Usage Scanner")
     parser.add_argument("path", nargs="?", default=None, help="Path to ~/.gemini/antigravity-cli")
     parser.add_argument("--json", action="store_true", default=True, help="Emit JSON output")
     parser.add_argument("--force", action="store_true", help="Bypass cache and force refresh from agy /usage")
+    parser.add_argument("--kill", type=str, default=None, help="Kill the running session by conversation ID")
     args = parser.parse_args()
 
     base_dir = expand_path(args.path) if args.path else default_base_dir()
+
+    if args.kill:
+        success = kill_session(args.kill, base_dir)
+        print(json.dumps({"success": success, "conversationId": args.kill}))
+        return
+
     result = scan(base_dir, force=args.force)
     print(json.dumps(result, indent=2, ensure_ascii=False))
 

@@ -109,10 +109,42 @@ Item {
 
             root.usageStatusText = data.usageStatusText || ""
             root.authHelpText = data.authHelpText || ""
+
+            root.checkLowQuotaAlerts(data.quotaGroups)
         } catch (e) {
             root.usageStatusText = "Scanner error"
             root.authHelpText = String(e)
             console.error("antigravity-usage", "Failed to parse scanner output:", e)
+        }
+    }
+
+    property var notifiedLowQuotas: ({})
+
+    function checkLowQuotaAlerts(quotaGroups) {
+        if (!quotaGroups || !Array.isArray(quotaGroups)) return
+        var now = Date.now()
+        for (var i = 0; i < quotaGroups.length; i++) {
+            var g = quotaGroups[i]
+            var buckets = g.buckets || []
+            for (var j = 0; j < buckets.length; j++) {
+                var b = buckets[j]
+                var remFrac = Number(b.remainingFraction !== undefined ? b.remainingFraction : 1.0)
+                if (remFrac <= 0.15) {
+                    var key = (g.name || "") + ":" + (b.name || "")
+                    var lastNotified = root.notifiedLowQuotas[key] || 0
+                    if (now - lastNotified > 7200000) {
+                        root.notifiedLowQuotas[key] = now
+                        var pct = Math.round(remFrac * 100)
+                        try {
+                            Quickshell.execDetached([
+                                "omarchy-notification-send",
+                                "Antigravity Quota Low (" + pct + "% remaining)",
+                                (g.name || "Model") + " " + (b.label || b.name || "") + " has " + pct + "% quota remaining."
+                            ])
+                        } catch (e) {}
+                    }
+                }
+            }
         }
     }
 

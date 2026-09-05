@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fcntl
 import glob
 import json
 import os
@@ -156,18 +157,67 @@ def parse_history_file(history_path: Path, recent_dates: list[str]) -> tuple[dic
 
 
 def parse_presence(presence_dir: Path) -> set[str]:
+    """Return set of conversation IDs whose presence locks are actively held by running processes."""
     active_ids = set()
     if not presence_dir.exists():
         return active_ids
 
-    try:
-        for p in presence_dir.glob("*.lock"):
-            conv_id = sanitize_plain_text(p.stem, 100)
-            if conv_id:
-                active_ids.add(conv_id)
-    except Exception:
-        pass
+    for p in presence_dir.glob("*.lock"):
+        cid = sanitize_plain_text(p.stem, 100)
+        if not cid:
+            continue
+        try:
+            with open(p, "rb") as f:
+                try:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    # Succeeded in acquiring exclusive lock: no active process holds it (stale file)
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                except (BlockingIOError, PermissionError, OSError):
+                    # Lock is actively held by a running agy process!
+                    active_ids.add(cid)
+        except Exception:
+            pass
     return active_ids
+
+
+def check_session_working(cid: str, base_dir: Path) -> bool:
+    """Check whether a session is actively executing/thinking or waiting for user input."""
+    # 1. Check sqlite database steps status
+    db_path = base_dir / "conversations" / f"{cid}.db"
+    if db_path.exists():
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=0.3)
+            cur = conn.cursor()
+            cur.execute("SELECT status FROM steps ORDER BY idx DESC LIMIT 1")
+            row = cur.fetchone()
+            conn.close()
+            if row and row[0] == 2:  # Status 2 = in progress / running
+                return True
+        except Exception:
+            pass
+
+    # 2. Check transcript.jsonl tail
+    tpath = base_dir / "brain" / cid / ".system_generated" / "logs" / "transcript.jsonl"
+    if tpath.exists():
+        try:
+            with open(tpath, "rb") as f:
+                f.seek(max(0, tpath.stat().st_size - 4096))
+                lines = f.readlines()
+                if lines:
+                    last_line = lines[-1].decode("utf-8", errors="replace").strip()
+                    if not last_line and len(lines) > 1:
+                        last_line = lines[-2].decode("utf-8", errors="replace").strip()
+                    if last_line:
+                        data = json.loads(last_line)
+                        step_type = data.get("type", "")
+                        if step_type in ("USER_INPUT", "GENERIC"):
+                            return True
+                        if step_type == "PLANNER_RESPONSE" and data.get("tool_calls"):
+                            return True
+        except Exception:
+            pass
+
+    return False
 
 
 def parse_transcripts(brain_dir: Path, today_str: str = "") -> tuple[Counter, dict[str, dict[str, Any]], list[dict[str, Any]], str]:
@@ -474,97 +524,203 @@ def scan(base_dir: Path, force: bool = False) -> dict[str, Any]:
     raw_quota = fetch_agy_usage_quota(base_dir, force=force)
     quota_groups = format_quota_groups(raw_quota)
 
-    # 5. Query SQLite DB for Sessions
-    all_sessions: list[dict[str, Any]] = []
-    active_sessions: list[dict[str, Any]] = []
-    total_db_sessions = 0
-    total_db_steps = 0
-    today_db_steps = 0
-    today_db_sessions = 0
-    has_active_session = False
-    active_status = "Idle"
+    # 5. Build Unified Session Registry
+    conv_map: dict[str, dict[str, Any]] = {}
 
+    # (a) Read history.jsonl for conversation history, workspaces, and user prompts
+    if history_path.exists():
+        try:
+            with open(history_path, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        e = json.loads(line)
+                        cid = sanitize_plain_text(e.get("conversationId") or "", 100)
+                        if not cid:
+                            continue
+                        ts = e.get("timestamp") or 0
+                        display = sanitize_plain_text(e.get("display") or "", 250)
+                        ws = sanitize_plain_text(e.get("workspace") or "", 300)
+                        if cid not in conv_map:
+                            conv_map[cid] = {
+                                "conversationId": cid,
+                                "firstPrompt": display,
+                                "lastPrompt": display,
+                                "workspace": ws,
+                                "timestamp": ts,
+                                "stepCount": 0,
+                                "agentName": "Antigravity"
+                            }
+                        else:
+                            if display:
+                                conv_map[cid]["lastPrompt"] = display
+                                if not conv_map[cid].get("firstPrompt"):
+                                    conv_map[cid]["firstPrompt"] = display
+                            conv_map[cid]["timestamp"] = max(conv_map[cid]["timestamp"], ts)
+                            if ws:
+                                conv_map[cid]["workspace"] = ws
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+    # (b) Inspect conversations/*.db for step counts and file modification time
+    conv_dir = base_dir / "conversations"
+    if conv_dir.exists():
+        try:
+            for db_file in conv_dir.glob("*.db"):
+                cid = sanitize_plain_text(db_file.stem, 100)
+                if not cid:
+                    continue
+                mtime = db_file.stat().st_mtime
+                step_count = 0
+                try:
+                    conn = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True, timeout=0.2)
+                    cur = conn.cursor()
+                    cur.execute("SELECT count(*) FROM steps")
+                    row = cur.fetchone()
+                    if row:
+                        step_count = int(row[0] or 0)
+                    conn.close()
+                except Exception:
+                    pass
+
+                if cid not in conv_map:
+                    conv_map[cid] = {
+                        "conversationId": cid,
+                        "firstPrompt": f"Session {cid[:8]}",
+                        "lastPrompt": "Session",
+                        "workspace": "",
+                        "timestamp": int(mtime * 1000),
+                        "stepCount": step_count,
+                        "agentName": "Antigravity"
+                    }
+                else:
+                    conv_map[cid]["stepCount"] = max(conv_map[cid].get("stepCount", 0), step_count)
+                conv_map[cid]["mtime"] = max(conv_map[cid].get("timestamp", 0) / 1000.0, mtime)
+        except Exception:
+            pass
+
+    # (c) Check legacy conversation_summaries.db if it has entries
     if db_path.exists():
         try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True, timeout=5)
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True, timeout=1)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-
             cursor.execute("""
                 SELECT conversation_id, title, preview, step_count, last_modified_time,
-                       workspace_uris, status, agent_name, parent_conversation_id,
-                       nesting_depth, not_fully_idle, killed, last_user_input_time
+                       workspace_uris, agent_name
                 FROM conversation_summaries
-                ORDER BY last_modified_time DESC
             """)
-
             for row in cursor:
-                total_db_sessions += 1
-                c_id = row["conversation_id"]
-                step_count = int(row["step_count"] or 0)
-                total_db_steps += step_count
-                last_mod = row["last_modified_time"] or ""
-                mod_day = local_date_from_timestamp(last_mod)
-
-                if mod_day == today_str:
-                    today_db_steps += step_count
-                    today_db_sessions += 1
-
-                is_active = (c_id in active_lock_ids) or bool(row["not_fully_idle"])
-                if is_active:
-                    has_active_session = True
-                    if bool(row["not_fully_idle"]):
-                        active_status = "Working"
-                    elif active_status != "Working":
-                        active_status = "Waiting"
-
-                ws_raw = row["workspace_uris"] or ""
-                workspace = ""
-                try:
-                    if ws_raw.startswith("["):
-                        ws_list = json.loads(ws_raw)
-                        workspace = ws_list[0] if ws_list else ""
-                    else:
-                        workspace = ws_raw
-                except Exception:
-                    workspace = ws_raw
-
-                clean_cid = sanitize_plain_text(c_id, 100)
-                clean_title = sanitize_plain_text(row["title"] or (f"Session {clean_cid[:8]}" if clean_cid else "Session"), 150)
-                clean_preview = sanitize_plain_text(row["preview"] or "", 250)
-                clean_ws = sanitize_plain_text(workspace, 300)
-                clean_ws_name = sanitize_plain_text(Path(workspace).name if workspace else "", 100)
-                clean_status = sanitize_plain_text("active" if is_active else (row["status"] or "idle"), 40)
-                clean_agent_name = sanitize_plain_text(row["agent_name"] or "Antigravity", 80)
-
-                session_item = {
-                    "conversationId": clean_cid,
-                    "title": clean_title,
-                    "preview": clean_preview,
-                    "stepCount": step_count,
-                    "lastModified": last_mod,
-                    "date": mod_day,
-                    "workspace": clean_ws,
-                    "workspaceName": clean_ws_name,
-                    "status": clean_status,
-                    "agentName": clean_agent_name,
-                    "notFullyIdle": bool(row["not_fully_idle"]),
-                    "killed": bool(row["killed"]),
-                    "isActive": is_active
-                }
-
-                all_sessions.append(session_item)
-                if is_active:
-                    active_sessions.append(session_item)
-
+                c_id = sanitize_plain_text(row["conversation_id"], 100)
+                if not c_id:
+                    continue
+                if c_id not in conv_map:
+                    conv_map[c_id] = {
+                        "conversationId": c_id,
+                        "firstPrompt": sanitize_plain_text(row["title"] or f"Session {c_id[:8]}", 150),
+                        "lastPrompt": sanitize_plain_text(row["preview"] or "Session", 250),
+                        "workspace": sanitize_plain_text(row["workspace_uris"] or "", 300),
+                        "timestamp": 0,
+                        "stepCount": int(row["step_count"] or 0),
+                        "agentName": sanitize_plain_text(row["agent_name"] or "Antigravity", 80)
+                    }
+                else:
+                    if row["title"]:
+                        conv_map[c_id]["firstPrompt"] = sanitize_plain_text(row["title"], 150)
+                    if row["preview"]:
+                        conv_map[c_id]["lastPrompt"] = sanitize_plain_text(row["preview"], 250)
+                    if row["agent_name"]:
+                        conv_map[c_id]["agentName"] = sanitize_plain_text(row["agent_name"], 80)
             conn.close()
         except Exception:
             pass
 
-    if len(active_lock_ids) > 0:
-        has_active_session = True
-        if active_status == "Idle":
-            active_status = "Waiting"
+    # (d) Ensure active_lock_ids are included
+    for cid in active_lock_ids:
+        if cid not in conv_map:
+            now_ts = int(dt.datetime.now().timestamp() * 1000)
+            conv_map[cid] = {
+                "conversationId": cid,
+                "firstPrompt": f"Session {cid[:8]}",
+                "lastPrompt": "Active Session",
+                "workspace": "",
+                "timestamp": now_ts,
+                "mtime": now_ts / 1000.0,
+                "stepCount": 0,
+                "agentName": "Antigravity"
+            }
+
+    # Sort sessions: active sessions first, then most recent modification time
+    def session_sort_key(c: dict[str, Any]) -> tuple[int, float]:
+        cid = c["conversationId"]
+        is_act = 1 if cid in active_lock_ids else 0
+        mtime = c.get("mtime") or (c.get("timestamp", 0) / 1000.0)
+        return (is_act, mtime)
+
+    sorted_convs = sorted(conv_map.values(), key=session_sort_key, reverse=True)
+
+    all_sessions: list[dict[str, Any]] = []
+    active_sessions: list[dict[str, Any]] = []
+    any_session_working = False
+
+    for item in sorted_convs:
+        cid = item["conversationId"]
+        is_active = cid in active_lock_ids
+        is_working = False
+        if is_active:
+            is_working = check_session_working(cid, base_dir)
+            if is_working:
+                any_session_working = True
+
+        clean_ws = sanitize_plain_text(item.get("workspace", ""), 300)
+        ws_name = Path(clean_ws).name if clean_ws else "Workspace"
+        mtime_sec = item.get("mtime") or (item.get("timestamp", 0) / 1000.0)
+        date_str = local_date_from_timestamp(mtime_sec)
+        iso_mod = dt.datetime.fromtimestamp(mtime_sec, tz=dt.timezone.utc).isoformat() if mtime_sec else ""
+
+        first_p = item.get("firstPrompt", "").strip()
+        last_p = item.get("lastPrompt", "").strip()
+        title = first_p or last_p or f"Session {cid[:8]}"
+        preview = last_p or first_p or title
+        if len(last_p) < 12 and len(first_p) > len(last_p):
+            preview = first_p
+
+        s_item = {
+            "conversationId": cid,
+            "title": sanitize_plain_text(title, 150),
+            "preview": sanitize_plain_text(preview, 250),
+            "stepCount": item.get("stepCount", 0),
+            "lastModified": iso_mod,
+            "date": date_str,
+            "workspace": clean_ws,
+            "workspaceName": ws_name,
+            "status": "active" if is_active else "idle",
+            "agentName": item.get("agentName", "Antigravity"),
+            "notFullyIdle": is_working,
+            "killed": False,
+            "isActive": is_active
+        }
+        all_sessions.append(s_item)
+        if is_active:
+            active_sessions.append(s_item)
+
+    has_active_session = len(active_lock_ids) > 0
+    if has_active_session:
+        active_status = "Working" if any_session_working else "Waiting"
+    else:
+        active_status = "Idle"
+
+    # Step and Session counts from real activity
+    today_steps_from_models = sum(m.get("todaySteps", 0) for m in model_list)
+    total_steps_from_models = sum(m.get("steps", 0) for m in model_list)
+    today_db_steps = today_steps_from_models or sum(s["stepCount"] for s in all_sessions if s["date"] == today_str)
+    total_db_steps = total_steps_from_models or sum(s["stepCount"] for s in all_sessions)
+    today_db_sessions = len(set(s["conversationId"] for s in all_sessions if s["date"] == today_str)) or (1 if has_active_session else 0)
+    total_db_sessions = len(all_sessions)
 
     # 6. Build recent days breakdown
     recent_days_data = []

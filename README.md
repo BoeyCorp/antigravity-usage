@@ -81,7 +81,7 @@ rm -f ~/.local/bin/omarchy-agent-usage-antigravity
 
 ## Features
 
-- **Status Bar Icon & Live Badge**: Color-coded pulse dot indicating session status (green = active/working, blue = waiting for input) and optional prompt counter badge.
+- **Status Bar Icon & Live Badge**: Color-coded pulse dot indicating session status (green = active/working, blue = waiting for input) and active sessions count badge (auto-hides when idle).
 - **Adaptive Polling**: Auto-scales refresh frequency from 60s idle down to 3s when an active session is working, then returns to 60s when idle.
 - **Exact Reset Times**: Displays both relative countdowns (e.g. `2h 15m`) and exact local wall-clock reset times (e.g. `04:15 AM`).
 - **Desktop Quota Alerts**: Proactive desktop notification alerts when any quota bucket drops below 15% remaining (with intelligent 2-hour per-bucket rate-limiting).
@@ -94,7 +94,7 @@ Configuration lives in `~/.config/omarchy/shell.json`.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `refreshIntervalSec` | integer (10–1800) | `60` | Telemetry refresh rate in seconds (adaptive to 3s while active) |
-| `showBadge` | boolean | `true` | Show prompt count badge in the bar widget |
+| `showBadge` | boolean | `true` | Show active sessions badge in the bar widget (hidden when idle) |
 
 ## License
 

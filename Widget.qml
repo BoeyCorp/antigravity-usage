@@ -209,7 +209,8 @@ BarWidget {
 
   function tooltipText() {
     if (!provider) return "Antigravity Usage"
-    var status = provider.hasActiveSession ? " (" + provider.activeStatus + ")" : ""
+    var count = provider.activeSessions ? provider.activeSessions.length : (provider.hasActiveSession ? 1 : 0)
+    var status = provider.hasActiveSession ? " (" + count + " " + (count === 1 ? "session" : "sessions") + " " + provider.activeStatus.toLowerCase() + ")" : " (Idle)"
     return "Antigravity" + status + "\n" + (provider.todayPrompts || 0) + " prompts today • " + (provider.currentModel || "Gemini")
   }
 
@@ -262,8 +263,13 @@ BarWidget {
 
     readonly property bool tooltipHovered: mouseArea.containsMouse
     readonly property bool showBadge: (root.settings && root.settings.showBadge !== false)
-    readonly property int promptCount: provider ? (provider.todayPrompts || 0) : 0
-    readonly property bool hasBadge: showBadge && promptCount > 0
+    readonly property int activeCount: {
+      if (!provider) return 0
+      if (provider.activeSessions && Array.isArray(provider.activeSessions))
+        return provider.activeSessions.length
+      return provider.hasActiveSession ? 1 : 0
+    }
+    readonly property bool hasBadge: showBadge && activeCount > 0
 
     width: hasBadge ? (13 + badgeText.implicitWidth + 10) : root.barSize
     height: root.barSize
@@ -311,8 +317,8 @@ BarWidget {
         id: badgeText
         visible: chip.hasBadge
         textFormat: Text.PlainText
-        text: String(chip.promptCount)
-        color: root.isWorking ? "#10B981" : root.dim
+        text: String(chip.activeCount)
+        color: root.isWorking ? "#10B981" : (root.isWaiting ? "#3B82F6" : root.dim)
         font.family: root.fontFamily
         font.pixelSize: 9
         font.bold: true
@@ -1370,7 +1376,7 @@ BarWidget {
           Text {
             textFormat: Text.PlainText
             Layout.fillWidth: true
-            text: "Show prompt count badge in bar"
+            text: "Show active sessions badge in bar"
             color: foreground
             font.family: fontFamily
             font.pixelSize: 11

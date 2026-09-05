@@ -360,6 +360,8 @@ BarWidget {
 
             StatusCard { provider: root.settingsMode ? null : root.provider }
             TodayCard { provider: root.settingsMode ? null : root.provider }
+            QuotaLimitsCard { provider: root.settingsMode ? null : root.provider }
+            ModelUsageCard { provider: root.settingsMode ? null : root.provider }
             WeekCard { provider: root.settingsMode ? null : root.provider }
             ToolsCard { provider: root.settingsMode ? null : root.provider }
             RecentSessionsCard { provider: root.settingsMode ? null : root.provider }
@@ -535,275 +537,218 @@ BarWidget {
     visible: !!provider && provider.ready && provider.hasLocalStats
     title: "Today & Totals"
 
+    RowLayout {
+      width: parent.width
+      spacing: Style.space(8)
+
+      StatBlock {
+        Layout.fillWidth: true
+        Layout.preferredWidth: 1
+        value: provider ? String(provider.todayPrompts || 0) : "0"
+        label: "prompts today"
+      }
+      StatBlock {
+        Layout.fillWidth: true
+        Layout.preferredWidth: 1
+        value: provider ? String(provider.todaySteps || 0) : "0"
+        label: "steps today"
+      }
+      StatBlock {
+        Layout.fillWidth: true
+        Layout.preferredWidth: 1
+        value: provider ? String(provider.totalPrompts || 0) : "0"
+        label: "total prompts"
+      }
+    }
+  }
+
+  component QuotaLimitsCard: SectionCard {
+    property var provider: null
+    visible: !!provider && provider.quotaGroups && provider.quotaGroups.length > 0
+    title: "Quota Limits"
+
     ColumnLayout {
       width: parent.width
-      spacing: 10
+      spacing: 8
 
-      // Top Counters
-      RowLayout {
-        Layout.fillWidth: true
-        spacing: Style.space(8)
-
-        StatBlock {
+      Repeater {
+        model: provider ? (provider.quotaGroups || []) : []
+        delegate: ColumnLayout {
+          required property var modelData
           Layout.fillWidth: true
-          Layout.preferredWidth: 1
-          value: provider ? String(provider.todayPrompts || 0) : "0"
-          label: "prompts today"
-        }
-        StatBlock {
-          Layout.fillWidth: true
-          Layout.preferredWidth: 1
-          value: provider ? String(provider.todaySteps || 0) : "0"
-          label: "steps today"
-        }
-        StatBlock {
-          Layout.fillWidth: true
-          Layout.preferredWidth: 1
-          value: provider ? String(provider.totalPrompts || 0) : "0"
-          label: "total prompts"
-        }
-      }
+          spacing: 4
 
-      // Live Quota Limits (/usage in agy)
-      ColumnLayout {
-        Layout.fillWidth: true
-        spacing: 6
-        visible: !!provider && provider.quotaGroups && provider.quotaGroups.length > 0
-
-        PanelSeparator {
-          Layout.fillWidth: true
-          foreground: root.foreground
-          strength: 0.12
-        }
-
-        RowLayout {
-          Layout.fillWidth: true
-          spacing: 6
-
-          Text {
-            textFormat: Text.PlainText
-            text: "Quota Limits (/usage)"
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: 11
-            font.bold: true
+          RowLayout {
             Layout.fillWidth: true
-          }
-
-          Text {
-            textFormat: Text.PlainText
-            text: "agy live"
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: 9
-            font.bold: true
-          }
-        }
-
-        Repeater {
-          model: provider ? (provider.quotaGroups || []) : []
-          delegate: ColumnLayout {
-            required property var modelData
-            Layout.fillWidth: true
-            spacing: 4
-
-            RowLayout {
-              Layout.fillWidth: true
-              spacing: 5
-
-              Rectangle {
-                width: 6
-                height: 6
-                radius: 3
-                color: (modelData.name || "").indexOf("Claude") !== -1 ? "#D97757" : "#38BDF8"
-              }
-
-              Text {
-                textFormat: Text.PlainText
-                text: modelData.name || "Group"
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: 10
-                font.bold: true
-                Layout.fillWidth: true
-              }
-            }
-
-            Repeater {
-              model: modelData.buckets || []
-              delegate: ColumnLayout {
-                required property var modelData
-                Layout.fillWidth: true
-                spacing: 2
-
-                RowLayout {
-                  Layout.fillWidth: true
-                  spacing: 6
-
-                  Text {
-                    textFormat: Text.PlainText
-                    text: modelData.label || modelData.name || "Limit"
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: 10
-                    Layout.fillWidth: true
-                    elide: Text.ElideRight
-                  }
-
-                  Text {
-                    textFormat: Text.PlainText
-                    text: root.formatCountdown(modelData.resetTime || modelData.reset_time)
-                    color: root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: 9
-                    font.bold: true
-                  }
-
-                  Text {
-                    textFormat: Text.PlainText
-                    readonly property real pct: Number(modelData.remainingPercent !== undefined ? modelData.remainingPercent : ((modelData.remainingFraction || 0) * 100))
-                    text: Math.round(pct) + "% remaining"
-                    color: pct <= 15 ? (bar ? bar.urgent : Color.urgent) : (pct <= 30 ? "#F59E0B" : root.foreground)
-                    font.family: root.fontFamily
-                    font.pixelSize: 9
-                    font.bold: true
-                  }
-                }
-
-                Rectangle {
-                  Layout.fillWidth: true
-                  Layout.preferredHeight: 7
-                  color: root.track
-                  radius: 2
-                  clip: true
-
-                  readonly property real frac: Math.min(1.0, Math.max(0.0, Number(modelData.remainingFraction !== undefined ? modelData.remainingFraction : (modelData.remaining_fraction || 0))))
-
-                  Rectangle {
-                    anchors.left: parent.left
-                    anchors.top: parent.top
-                    anchors.bottom: parent.bottom
-                    width: parent.width * parent.frac
-                    color: {
-                      if (parent.frac <= 0.15) return bar ? bar.urgent : Color.urgent
-                      if (parent.frac <= 0.30) return "#F59E0B"
-                      return modelData.color || ((modelData.name || "").indexOf("Claude") !== -1 ? "#D97757" : root.accent)
-                    }
-                    radius: 2
-                    Behavior on width { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-
-      // Models Breakdown & Bar Graphs
-      ColumnLayout {
-        Layout.fillWidth: true
-        spacing: 6
-        visible: !!provider && ((provider.modelList && provider.modelList.length > 0) || (provider.modelUsage && Object.keys(provider.modelUsage).length > 0))
-
-        PanelSeparator {
-          Layout.fillWidth: true
-          foreground: root.foreground
-          strength: 0.12
-        }
-
-        RowLayout {
-          Layout.fillWidth: true
-          spacing: 6
-
-          Text {
-            textFormat: Text.PlainText
-            text: "Model Usage Breakdown"
-            color: root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: 11
-            font.bold: true
-            Layout.fillWidth: true
-          }
-
-          Text {
-            textFormat: Text.PlainText
-            text: "share of activity"
-            color: root.dim
-            font.family: root.fontFamily
-            font.pixelSize: 9
-          }
-        }
-
-        Repeater {
-          model: {
-            if (provider && provider.modelList && provider.modelList.length > 0)
-              return provider.modelList
-            var usage = provider ? (provider.modelUsage || {}) : {}
-            var res = []
-            for (var k in usage) res.push(usage[k])
-            return res
-          }
-          delegate: ColumnLayout {
-            required property var modelData
-            Layout.fillWidth: true
-            spacing: 2
-
-            RowLayout {
-              Layout.fillWidth: true
-              spacing: 6
-
-              Text {
-                textFormat: Text.PlainText
-                text: modelData.name || "Model"
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: 10
-                font.bold: true
-                elide: Text.ElideRight
-                Layout.fillWidth: true
-              }
-
-              Text {
-                textFormat: Text.PlainText
-                text: {
-                  var p = Number(modelData.prompts || 0)
-                  var s = Number(modelData.steps || 0)
-                  var sFmt = s >= 1000 ? (s / 1000).toFixed(1) + "k" : String(s)
-                  return p + " prompts · " + sFmt + " steps"
-                }
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: 9
-              }
-
-              Text {
-                textFormat: Text.PlainText
-                text: Math.round(Number(modelData.sharePercent || 0)) + "%"
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: 9
-                font.bold: true
-              }
-            }
+            spacing: 5
 
             Rectangle {
-              Layout.fillWidth: true
-              Layout.preferredHeight: 6
-              color: root.track
-              radius: 2
-              clip: true
+              width: 6
+              height: 6
+              radius: 3
+              color: (modelData.name || "").indexOf("Claude") !== -1 ? "#D97757" : "#38BDF8"
+            }
 
-              readonly property real shareFrac: Math.min(1.0, Math.max(0.0, Number(modelData.shareFraction || 0)))
+            Text {
+              textFormat: Text.PlainText
+              text: modelData.name || "Group"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: 10
+              font.bold: true
+              Layout.fillWidth: true
+            }
+          }
+
+          Repeater {
+            model: modelData.buckets || []
+            delegate: ColumnLayout {
+              required property var modelData
+              Layout.fillWidth: true
+              spacing: 2
+
+              RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: modelData.label || modelData.name || "Limit"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: 10
+                  Layout.fillWidth: true
+                  elide: Text.ElideRight
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: root.formatCountdown(modelData.resetTime || modelData.reset_time)
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: 9
+                  font.bold: true
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  readonly property real pct: Number(modelData.remainingPercent !== undefined ? modelData.remainingPercent : ((modelData.remainingFraction || 0) * 100))
+                  text: Math.round(pct) + "% remaining"
+                  color: pct <= 15 ? (bar ? bar.urgent : Color.urgent) : (pct <= 30 ? "#F59E0B" : root.foreground)
+                  font.family: root.fontFamily
+                  font.pixelSize: 9
+                  font.bold: true
+                }
+              }
 
               Rectangle {
-                anchors.left: parent.left
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                width: parent.width * parent.shareFrac
-                color: modelData.color || ((modelData.name || "").indexOf("Claude") !== -1 ? "#D97757" : root.accent)
+                Layout.fillWidth: true
+                Layout.preferredHeight: 7
+                color: root.track
                 radius: 2
-                Behavior on width { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+                clip: true
+
+                readonly property real frac: Math.min(1.0, Math.max(0.0, Number(modelData.remainingFraction !== undefined ? modelData.remainingFraction : (modelData.remaining_fraction || 0))))
+
+                Rectangle {
+                  anchors.left: parent.left
+                  anchors.top: parent.top
+                  anchors.bottom: parent.bottom
+                  width: parent.width * parent.frac
+                  color: {
+                    if (parent.frac <= 0.15) return bar ? bar.urgent : Color.urgent
+                    if (parent.frac <= 0.30) return "#F59E0B"
+                    return modelData.color || ((modelData.name || "").indexOf("Claude") !== -1 ? "#D97757" : root.accent)
+                  }
+                  radius: 2
+                  Behavior on width { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+                }
               }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  component ModelUsageCard: SectionCard {
+    property var provider: null
+    visible: !!provider && ((provider.modelList && provider.modelList.length > 0) || (provider.modelUsage && Object.keys(provider.modelUsage).length > 0))
+    title: "Model Usage Breakdown"
+
+    ColumnLayout {
+      width: parent.width
+      spacing: 6
+
+      Repeater {
+        model: {
+          if (provider && provider.modelList && provider.modelList.length > 0)
+            return provider.modelList
+          var usage = provider ? (provider.modelUsage || {}) : {}
+          var res = []
+          for (var k in usage) res.push(usage[k])
+          return res
+        }
+        delegate: ColumnLayout {
+          required property var modelData
+          Layout.fillWidth: true
+          spacing: 2
+
+          RowLayout {
+            Layout.fillWidth: true
+            spacing: 6
+
+            Text {
+              textFormat: Text.PlainText
+              text: modelData.name || "Model"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: 10
+              font.bold: true
+              elide: Text.ElideRight
+              Layout.fillWidth: true
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              text: {
+                var p = Number(modelData.prompts || 0)
+                var s = Number(modelData.steps || 0)
+                var sFmt = s >= 1000 ? (s / 1000).toFixed(1) + "k" : String(s)
+                return p + " prompts · " + sFmt + " steps"
+              }
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: 9
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              text: Math.round(Number(modelData.sharePercent || 0)) + "%"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: 9
+              font.bold: true
+            }
+          }
+
+          Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 6
+            color: root.track
+            radius: 2
+            clip: true
+
+            readonly property real shareFrac: Math.min(1.0, Math.max(0.0, Number(modelData.shareFraction || 0)))
+
+            Rectangle {
+              anchors.left: parent.left
+              anchors.top: parent.top
+              anchors.bottom: parent.bottom
+              width: parent.width * parent.shareFrac
+              color: modelData.color || ((modelData.name || "").indexOf("Claude") !== -1 ? "#D97757" : root.accent)
+              radius: 2
+              Behavior on width { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
             }
           }
         }

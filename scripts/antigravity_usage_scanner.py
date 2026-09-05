@@ -9,8 +9,11 @@ import glob
 import json
 import os
 import re
+import shutil
 import sqlite3
+import subprocess
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -99,6 +102,8 @@ def empty_result() -> dict[str, Any]:
         "recentSessions": [],
         "toolUsage": {},
         "modelUsage": {},
+        "modelList": [],
+        "quotaGroups": [],
         "limits": [],
         "recentWorkspaces": [],
         "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -165,13 +170,13 @@ def parse_presence(presence_dir: Path) -> set[str]:
     return active_ids
 
 
-def parse_transcripts(brain_dir: Path) -> tuple[Counter, dict[str, dict[str, Any]], str]:
+def parse_transcripts(brain_dir: Path, today_str: str = "") -> tuple[Counter, dict[str, dict[str, Any]], list[dict[str, Any]], str]:
     tool_counter: Counter = Counter()
     models_stats: dict[str, dict[str, Any]] = {}
     latest_model = "Gemini 3.7 Flash"
 
     if not brain_dir.exists():
-        return tool_counter, models_stats, latest_model
+        return tool_counter, models_stats, [], latest_model
 
     try:
         transcript_files = list(brain_dir.glob("*/.system_generated/logs/transcript.jsonl"))
@@ -192,6 +197,9 @@ def parse_transcripts(brain_dir: Path) -> tuple[Counter, dict[str, dict[str, Any
                             continue
 
                         content = step.get("content") or ""
+                        created_at = step.get("created_at") or ""
+                        step_day = local_date_from_timestamp(created_at)
+                        is_today = (step_day == today_str) if today_str else False
                         
                         # Model detection
                         if "Model Selection" in content:
@@ -208,12 +216,20 @@ def parse_transcripts(brain_dir: Path) -> tuple[Counter, dict[str, dict[str, Any
                                 "name": current_model,
                                 "prompts": 0,
                                 "steps": 0,
+                                "todayPrompts": 0,
+                                "todaySteps": 0,
                                 "sessions": set()
                             }
 
                         models_stats[current_model]["steps"] += 1
+                        if is_today:
+                            models_stats[current_model]["todaySteps"] += 1
+
                         if step.get("type") == "USER_INPUT":
                             models_stats[current_model]["prompts"] += 1
+                            if is_today:
+                                models_stats[current_model]["todayPrompts"] += 1
+
                         models_stats[current_model]["sessions"].add(conv_id)
 
                         # Tool call detection
@@ -231,21 +247,208 @@ def parse_transcripts(brain_dir: Path) -> tuple[Counter, dict[str, dict[str, Any
 
     # Convert sets to counts and sort models
     formatted_models: dict[str, dict[str, Any]] = {}
+    model_list: list[dict[str, Any]] = []
+    total_model_prompts = sum(d["prompts"] for d in models_stats.values()) or 1
+
     for m, data in sorted(models_stats.items(), key=lambda item: item[1]["prompts"] + item[1]["steps"], reverse=True):
         clean_model_name = sanitize_plain_text(m, 80)
-        formatted_models[clean_model_name] = {
+        p_count = data["prompts"]
+        s_count = data["steps"]
+        share_frac = round(p_count / max(1, total_model_prompts), 4)
+        share_pct = round(share_frac * 100, 1)
+
+        m_lower = clean_model_name.lower()
+        if "claude" in m_lower:
+            m_color = "#D97757"
+        elif "gpt" in m_lower:
+            m_color = "#10A37F"
+        elif "pro" in m_lower or "high" in m_lower:
+            m_color = "#A855F7"
+        else:
+            m_color = "#38BDF8"
+
+        entry = {
             "name": clean_model_name,
-            "prompts": data["prompts"],
-            "steps": data["steps"],
+            "prompts": p_count,
+            "steps": s_count,
+            "todayPrompts": data.get("todayPrompts", 0),
+            "todaySteps": data.get("todaySteps", 0),
             "sessions": len(data["sessions"]),
+            "shareFraction": share_frac,
+            "sharePercent": share_pct,
+            "color": m_color,
             "inputTokens": 0,
             "outputTokens": 0
         }
+        formatted_models[clean_model_name] = entry
+        model_list.append(entry)
 
-    return tool_counter, formatted_models, latest_model
+    return tool_counter, formatted_models, model_list, latest_model
 
 
-def scan(base_dir: Path) -> dict[str, Any]:
+def fetch_agy_usage_quota(base_dir: Path, force: bool = False) -> dict[str, Any]:
+    """Fetch real-time quota information via `agy -p /usage --output-format json` with caching."""
+    cache_path = base_dir / "cache" / "quota_usage_cache.json"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # 1. Read from cache if fresh and not force-refreshing (TTL: 120s)
+    if not force and cache_path.exists():
+        try:
+            mtime = cache_path.stat().st_mtime
+            if time.time() - mtime < 120:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict) and "groups" in data:
+                        return data
+        except Exception:
+            pass
+
+    # 2. Query agy CLI directly
+    agy_bin = shutil.which("agy") or str(Path.home() / ".local/bin/agy")
+    try:
+        res = subprocess.run(
+            [agy_bin, "-p", "/usage", "--output-format", "json"],
+            capture_output=True,
+            text=True,
+            timeout=12
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            payload = json.loads(res.stdout)
+            cmd_data = payload.get("command", {}).get("data", {})
+            if isinstance(cmd_data, dict) and "groups" in cmd_data and len(cmd_data["groups"]) > 0:
+                try:
+                    with open(cache_path, "w", encoding="utf-8") as f:
+                        json.dump(cmd_data, f)
+                except Exception:
+                    pass
+                return cmd_data
+    except Exception:
+        pass
+
+    # 3. Fallback to stale cache if present
+    if cache_path.exists():
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict) and "groups" in data:
+                    return data
+        except Exception:
+            pass
+
+    return {}
+
+
+def format_quota_groups(raw_data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Format agy /usage group and bucket metrics for QML consumption."""
+    groups = raw_data.get("groups", [])
+    if not groups:
+        # Graceful default structure when offline / before first query
+        return [
+            {
+                "name": "Gemini Models",
+                "description": "Models within this group: Gemini Flash, Gemini Pro",
+                "color": "#38BDF8",
+                "buckets": [
+                    {
+                        "id": "gemini-weekly",
+                        "name": "Weekly Limit Remaining",
+                        "label": "Weekly Limit",
+                        "window": "weekly",
+                        "remainingFraction": 1.0,
+                        "remainingPercent": 100,
+                        "usedPercent": 0,
+                        "resetTime": "",
+                        "description": "Weekly rolling quota",
+                        "color": "#38BDF8"
+                    },
+                    {
+                        "id": "gemini-5h",
+                        "name": "Five Hour Limit Remaining",
+                        "label": "5-Hour Limit",
+                        "window": "5h",
+                        "remainingFraction": 1.0,
+                        "remainingPercent": 100,
+                        "usedPercent": 0,
+                        "resetTime": "",
+                        "description": "5-hour burst window",
+                        "color": "#38BDF8"
+                    }
+                ]
+            },
+            {
+                "name": "Claude and GPT models",
+                "description": "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS",
+                "color": "#D97757",
+                "buckets": [
+                    {
+                        "id": "3p-weekly",
+                        "name": "Weekly Limit Remaining",
+                        "label": "Weekly Limit",
+                        "window": "weekly",
+                        "remainingFraction": 1.0,
+                        "remainingPercent": 100,
+                        "usedPercent": 0,
+                        "resetTime": "",
+                        "description": "Weekly rolling quota",
+                        "color": "#D97757"
+                    },
+                    {
+                        "id": "3p-5h",
+                        "name": "Five Hour Limit Remaining",
+                        "label": "5-Hour Limit",
+                        "window": "5h",
+                        "remainingFraction": 1.0,
+                        "remainingPercent": 100,
+                        "usedPercent": 0,
+                        "resetTime": "",
+                        "description": "5-hour burst window",
+                        "color": "#D97757"
+                    }
+                ]
+            }
+        ]
+
+    formatted = []
+    for g in groups:
+        g_name = sanitize_plain_text(g.get("name", "Model Group"), 80)
+        is_claude = "claude" in g_name.lower() or "gpt" in g_name.lower()
+        g_color = "#D97757" if is_claude else "#38BDF8"
+
+        buckets = []
+        for b in g.get("buckets", []):
+            b_id = sanitize_plain_text(b.get("id", ""), 50)
+            b_name = sanitize_plain_text(b.get("name", "Limit"), 100)
+            b_win = sanitize_plain_text(b.get("window", ""), 20)
+            rem_frac = float(b.get("remaining_fraction", 1.0))
+            rem_frac = min(1.0, max(0.0, rem_frac))
+            rem_pct = min(100, max(0, round(rem_frac * 100)))
+            used_pct = 100 - rem_pct
+
+            label = "Weekly Limit" if "weekly" in b_win.lower() or "weekly" in b_name.lower() else "5-Hour Limit"
+
+            buckets.append({
+                "id": b_id,
+                "name": b_name,
+                "label": label,
+                "window": b_win,
+                "remainingFraction": round(rem_frac, 4),
+                "remainingPercent": rem_pct,
+                "usedPercent": used_pct,
+                "resetTime": sanitize_plain_text(b.get("reset_time", ""), 60),
+                "description": sanitize_plain_text(b.get("description", ""), 250),
+                "color": g_color
+            })
+
+        formatted.append({
+            "name": g_name,
+            "description": sanitize_plain_text(g.get("description", ""), 250),
+            "color": g_color,
+            "buckets": buckets
+        })
+    return formatted
+
+
+def scan(base_dir: Path, force: bool = False) -> dict[str, Any]:
     if not base_dir.exists():
         return empty_result()
 
@@ -264,10 +467,14 @@ def scan(base_dir: Path) -> dict[str, Any]:
     # 2. Parse History JSONL
     daily_prompts, total_prompts_hist, recent_prompts, ws_counter = parse_history_file(history_path, recent_dates)
 
-    # 3. Parse Transcripts for Tool Calls & Models
-    tool_counter, model_usage_dict, latest_model = parse_transcripts(brain_dir)
+    # 3. Parse Transcripts for Tool Calls, Models & Model List
+    tool_counter, model_usage_dict, model_list, latest_model = parse_transcripts(brain_dir, today_str)
 
-    # 4. Query SQLite DB for Sessions
+    # 4. Fetch real quota data from agy CLI /usage
+    raw_quota = fetch_agy_usage_quota(base_dir, force=force)
+    quota_groups = format_quota_groups(raw_quota)
+
+    # 5. Query SQLite DB for Sessions
     all_sessions: list[dict[str, Any]] = []
     active_sessions: list[dict[str, Any]] = []
     total_db_sessions = 0
@@ -359,7 +566,7 @@ def scan(base_dir: Path) -> dict[str, Any]:
         if active_status == "Idle":
             active_status = "Waiting"
 
-    # 5. Build recent days breakdown
+    # 6. Build recent days breakdown
     recent_days_data = []
     weekly_prompts = 0
     for day in recent_dates:
@@ -371,67 +578,23 @@ def scan(base_dir: Path) -> dict[str, Any]:
             "prompts": p_count
         })
 
-    # 6. Calculate Limits and Reset Windows by Model Group
-    now_utc = dt.datetime.now(dt.timezone.utc)
-    
-    # Reset timestamps
-    next_midnight_utc = (now_utc + dt.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    daily_reset_iso = next_midnight_utc.isoformat()
-    session_5h_iso = (now_utc + dt.timedelta(hours=5)).isoformat()
+    # 7. Convert quota groups into legacy limits array for backward compatibility
+    limits = []
+    for g in quota_groups:
+        for b in g.get("buckets", []):
+            limits.append({
+                "group": b.get("id", ""),
+                "groupName": g.get("name", ""),
+                "title": f"{g.get('name', '')} {b.get('label', '')}",
+                "icon": "",
+                "color": b.get("color", "#38BDF8"),
+                "used": b.get("usedPercent", 0),
+                "allowance": 100,
+                "percent": round(1.0 - b.get("remainingFraction", 1.0), 3),
+                "resetsAt": b.get("resetTime", "")
+            })
 
-    # Aggregate prompts per model group
-    group_prompts = {"flash": 0, "thinking": 0, "claude": 0}
-    for m_name, m_data in model_usage_dict.items():
-        m_lower = m_name.lower()
-        p_cnt = int(m_data.get("prompts", 0))
-        if "claude" in m_lower:
-            group_prompts["claude"] += p_cnt
-        elif "high" in m_lower or "thinking" in m_lower or "pro" in m_lower:
-            group_prompts["thinking"] += p_cnt
-        else:
-            group_prompts["flash"] += p_cnt
-
-    flash_allowance = 200
-    thinking_allowance = 100
-    claude_allowance = 50
-
-    limits = [
-        {
-            "group": "flash",
-            "groupName": "Gemini Flash Series",
-            "title": "Flash Models Quota",
-            "icon": "",
-            "color": "#38BDF8",
-            "used": group_prompts["flash"],
-            "allowance": flash_allowance,
-            "percent": min(1.0, round(group_prompts["flash"] / max(1, flash_allowance), 3)),
-            "resetsAt": daily_reset_iso
-        },
-        {
-            "group": "thinking",
-            "groupName": "Gemini Thinking Series",
-            "title": "Thinking Models Quota",
-            "icon": "",
-            "color": "#A855F7",
-            "used": group_prompts["thinking"],
-            "allowance": thinking_allowance,
-            "percent": min(1.0, round(group_prompts["thinking"] / max(1, thinking_allowance), 3)),
-            "resetsAt": daily_reset_iso
-        },
-        {
-            "group": "claude",
-            "groupName": "Claude Series",
-            "title": "Claude 5h Session Window",
-            "icon": "",
-            "color": "#D97757",
-            "used": group_prompts["claude"],
-            "allowance": claude_allowance,
-            "percent": min(1.0, round(group_prompts["claude"] / max(1, claude_allowance), 3)),
-            "resetsAt": session_5h_iso
-        }
-    ]
-
-    # 7. Workspaces list (sorted by frequency)
+    # 8. Workspaces list (sorted by frequency)
     recent_workspaces = [
         {"path": sanitize_plain_text(ws, 300), "name": sanitize_plain_text(Path(ws).name, 100), "count": count}
         for ws, count in ws_counter.most_common(5)
@@ -466,6 +629,8 @@ def scan(base_dir: Path) -> dict[str, Any]:
         "recentSessions": all_sessions[:6],
         "toolUsage": tools_dict,
         "modelUsage": model_usage_dict,
+        "modelList": model_list,
+        "quotaGroups": quota_groups,
         "limits": limits,
         "recentWorkspaces": recent_workspaces,
         "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -478,10 +643,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Antigravity Usage Scanner")
     parser.add_argument("path", nargs="?", default=None, help="Path to ~/.gemini/antigravity-cli")
     parser.add_argument("--json", action="store_true", default=True, help="Emit JSON output")
+    parser.add_argument("--force", action="store_true", help="Bypass cache and force refresh from agy /usage")
     args = parser.parse_args()
 
     base_dir = expand_path(args.path) if args.path else default_base_dir()
-    result = scan(base_dir)
+    result = scan(base_dir, force=args.force)
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 

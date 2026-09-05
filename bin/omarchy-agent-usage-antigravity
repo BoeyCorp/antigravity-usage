@@ -214,60 +214,91 @@ def collect(base_dir: Path) -> dict[str, Any]:
             "steps": data["steps"]
         }
 
-    # Limits calculation by model group
-    now_utc = dt.datetime.now(dt.timezone.utc)
-    next_midnight_utc = (now_utc + dt.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    session_reset_utc = now_utc + dt.timedelta(hours=5)
+    # Limits calculation: check quota cache from agy /usage first
+    cache_path = base_dir / "cache" / "quota_usage_cache.json"
+    raw_quota = {}
+    if cache_path.exists():
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                raw_quota = json.load(f)
+        except Exception:
+            pass
 
-    flash_count = 0
-    thinking_count = 0
-    claude_count = 0
+    limits = []
+    if raw_quota and "groups" in raw_quota:
+        for g in raw_quota["groups"]:
+            g_name = sanitize_plain_text(g.get("name", ""), 80)
+            is_claude = "claude" in g_name.lower() or "gpt" in g_name.lower()
+            g_color = "#D97757" if is_claude else "#38BDF8"
+            for b in g.get("buckets", []):
+                rem_frac = min(1.0, max(0.0, float(b.get("remaining_fraction", 1.0))))
+                b_name = sanitize_plain_text(b.get("name", "Limit"), 100)
+                limits.append({
+                    "group": sanitize_plain_text(b.get("id", ""), 50),
+                    "groupName": g_name,
+                    "title": f"{g_name} {b_name}",
+                    "icon": "",
+                    "color": g_color,
+                    "used": round((1.0 - rem_frac) * 100, 1),
+                    "allowance": 100,
+                    "percent": round(1.0 - rem_frac, 3),
+                    "resetsAt": sanitize_plain_text(b.get("reset_time", ""), 60)
+                })
 
-    for m_name, m_data in models_stats.items():
-        m_lower = m_name.lower()
-        p_cnt = int(m_data.get("prompts", 0))
-        if "claude" in m_lower:
-            claude_count += p_cnt
-        elif "high" in m_lower or "thinking" in m_lower or "pro" in m_lower:
-            thinking_count += p_cnt
-        else:
-            flash_count += p_cnt
+    if not limits:
+        now_utc = dt.datetime.now(dt.timezone.utc)
+        next_midnight_utc = (now_utc + dt.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        session_reset_utc = now_utc + dt.timedelta(hours=5)
 
-    limits = [
-        {
-            "group": "flash",
-            "groupName": "Gemini Flash Series",
-            "title": "Flash Models Quota",
-            "icon": "",
-            "color": "#38BDF8",
-            "used": flash_count,
-            "allowance": 200,
-            "percent": min(1.0, round(flash_count / 200.0, 3)),
-            "resetsAt": next_midnight_utc.isoformat()
-        },
-        {
-            "group": "thinking",
-            "groupName": "Gemini Thinking Series",
-            "title": "Thinking Models Quota",
-            "icon": "",
-            "color": "#A855F7",
-            "used": thinking_count,
-            "allowance": 100,
-            "percent": min(1.0, round(thinking_count / 100.0, 3)),
-            "resetsAt": next_midnight_utc.isoformat()
-        },
-        {
-            "group": "claude",
-            "groupName": "Claude Series",
-            "title": "Claude 5h Session Window",
-            "icon": "",
-            "color": "#D97757",
-            "used": claude_count,
-            "allowance": 50,
-            "percent": min(1.0, round(claude_count / 50.0, 3)),
-            "resetsAt": session_reset_utc.isoformat()
-        }
-    ]
+        flash_count = 0
+        thinking_count = 0
+        claude_count = 0
+
+        for m_name, m_data in models_stats.items():
+            m_lower = m_name.lower()
+            p_cnt = int(m_data.get("prompts", 0))
+            if "claude" in m_lower:
+                claude_count += p_cnt
+            elif "high" in m_lower or "thinking" in m_lower or "pro" in m_lower:
+                thinking_count += p_cnt
+            else:
+                flash_count += p_cnt
+
+        limits = [
+            {
+                "group": "flash",
+                "groupName": "Gemini Flash Series",
+                "title": "Flash Models Quota",
+                "icon": "",
+                "color": "#38BDF8",
+                "used": flash_count,
+                "allowance": 200,
+                "percent": min(1.0, round(flash_count / 200.0, 3)),
+                "resetsAt": next_midnight_utc.isoformat()
+            },
+            {
+                "group": "thinking",
+                "groupName": "Gemini Thinking Series",
+                "title": "Thinking Models Quota",
+                "icon": "",
+                "color": "#A855F7",
+                "used": thinking_count,
+                "allowance": 100,
+                "percent": min(1.0, round(thinking_count / 100.0, 3)),
+                "resetsAt": next_midnight_utc.isoformat()
+            },
+            {
+                "group": "claude",
+                "groupName": "Claude Series",
+                "title": "Claude 5h Session Window",
+                "icon": "",
+                "color": "#D97757",
+                "used": claude_count,
+                "allowance": 50,
+                "percent": min(1.0, round(claude_count / 50.0, 3)),
+                "resetsAt": session_reset_utc.isoformat()
+            }
+        ]
 
     status_text = "Working" if not_fully_idle else ("Active" if has_active_locks else "Ready")
 

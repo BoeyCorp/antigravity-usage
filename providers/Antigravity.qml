@@ -35,6 +35,8 @@ Item {
     property var toolUsage: ({})
     property var modelUsage: ({})
     property var limits: []
+    property var quotaGroups: []
+    property var modelList: []
     property var recentWorkspaces: []
 
     property bool hasLocalStats: false
@@ -100,7 +102,9 @@ Item {
             root.recentSessions = data.recentSessions || []
             root.toolUsage = data.toolUsage || ({})
             root.modelUsage = data.modelUsage || ({})
+            root.modelList = data.modelList || []
             root.limits = data.limits || []
+            root.quotaGroups = data.quotaGroups || []
             root.recentWorkspaces = data.recentWorkspaces || []
 
             root.usageStatusText = data.usageStatusText || ""
@@ -117,7 +121,11 @@ Item {
             return
 
         root.refreshing = true
-        scanner.command = ["python3", root.scannerScriptPath]
+        var cmd = ["python3", root.scannerScriptPath]
+        if (force === true) {
+            cmd.push("--force")
+        }
+        scanner.command = cmd
         scanner.running = true
     }
 }

@@ -7,24 +7,28 @@ Antigravity active session monitor, prompt metrics, tool telemetry, and 7-day us
 ## Features
 
 - **Live Status & Pulse**: Visual status indicator (pulsing green/blue dot) in the Omarchy bar showing when an Antigravity agent is active, working, or idle.
-- **Prompt & Step Counters**: Prompts today, steps today, and all-time totals.
-- **7-Day Activity Chart**: Visual bar chart of prompt volume over the last 7 days with hover tooltips.
+- **Today & Totals with Live Quota & Model Breakdown**:
+  - Top summary cards: Prompts today, steps today, and all-time totals.
+  - **Live Quota Limits Bar Graphs**: Real-time quota buckets fetched directly from `agy /usage` (Gemini Models weekly/5h limits, Claude & GPT models weekly/5h limits) with dynamic countdown reset timers, remaining percentage, and health-based color transitions.
+  - **Model Usage Breakdown Bar Graphs**: Visual volume and activity share bars for all active models (Gemini Flash/Pro, Claude Sonnet/Opus, etc.) with prompt and step counters.
+- **7-Day Activity Chart**: Visual bar chart of prompt volume over the last 7 days with date headers.
 - **Tool Telemetry Breakdown**: Live counter of tool calls (`run_command`, `write_to_file`, `replace_file_content`, `view_file`, `grep_search`, `find_by_name`, `subagents`, etc.).
 - **Active & Recent Sessions**: Preview of current tasks, workspace names, step progress, and session status.
+- **Fast Smart Caching**: Sub-second responsiveness using an intelligent cache for `agy /usage` with on-demand `--force` refresh.
 - **Dual Omarchy Integration**:
   1. Standalone Bar Widget with rich QML popup modal (`jesseburlamaque.antigravity-usage`).
   2. Native Omarchy Agents panel collector (`bin/omarchy-agent-usage-antigravity`).
 
 ## Requirements
 
-- Python 3 (standard library: `sqlite3`, `json`, `datetime`, `pathlib`, `collections`)
+- Python 3 (standard library: `sqlite3`, `json`, `datetime`, `pathlib`, `collections`, `subprocess`, `shutil`)
 - Google Antigravity (`agy` CLI / IDE) with local session data in `~/.gemini/antigravity-cli`
 - Omarchy Shell / Quickshell
 
 ## Installation
 
 ```sh
-omarchy plugin add https://github.com/jesseburlamaque/antigravity-usage.git --enable
+omarchy plugin add https://github.com/BoeyCorp/antigravity-usage.git --enable
 omarchy restart shell
 ```
 
@@ -62,11 +66,11 @@ rm -f ~/.local/bin/omarchy-agent-usage-antigravity
 ## Interactions
 
 - **Left Click**: Open/close popup panel with stats, charts, and recent sessions.
-- **Middle Click**: Force immediate refresh of telemetry data.
+- **Middle Click**: Force immediate refresh of telemetry and quota data.
 - **Right Click**: Open in-popup settings view.
 - **Keyboard Shortcuts**:
   - `Esc`: Close popup.
-  - `r`: Refresh data.
+  - `r`: Force refresh live quota and usage data.
   - `s`: Toggle between Stats and Settings view.
 
 ## Configuration
@@ -80,4 +84,4 @@ Configuration lives in `~/.config/omarchy/shell.json`.
 
 ## License
 
-MIT © Jesse Burlamaque
+MIT © BoeyCorp (Forked and enhanced from original by Jesse Burlamaque)

@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "jesseburlamaque.antigravity-usage",
   "name": "Antigravity Usage",
-  "version": "1.0.0",
-  "author": "Jesse Burlamaque",
+  "version": "1.1.0",
+  "author": "BoeyCorp (original by Jesse Burlamaque)",
   "license": "MIT",
-  "description": "Antigravity active sessions, prompt history, tool telemetry, and usage stats in the Omarchy bar.",
+  "description": "Antigravity active sessions, live quota metrics (/usage), model breakdown, prompt history, and tool telemetry in the Omarchy bar.",
   "kinds": ["bar-widget"],
   "activation": "on-demand",
   "entryPoints": {

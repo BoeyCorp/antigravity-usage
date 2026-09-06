@@ -948,17 +948,7 @@ BarWidget {
                 var p = pCount
                 var s = sCount
                 var sFmt = s >= 1000 ? (s / 1000).toFixed(1) + "k" : String(s)
-                if (modelCardRoot.timeRange === "all") {
-                  var tp = Number(modelData.todayPrompts || 0)
-                  if (tp > 0) {
-                    return tp + " today (" + p + " total) · " + sFmt + " steps"
-                  }
-                  return p + " prompts · " + sFmt + " steps"
-                } else if (modelCardRoot.timeRange === "today") {
-                  return p + " prompts · " + sFmt + " steps"
-                } else {
-                  return p + " prompts · " + sFmt + " steps in 7d"
-                }
+                return p + " prompts · " + sFmt + " steps"
               }
               color: root.dim
               font.family: root.fontFamily

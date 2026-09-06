@@ -142,12 +142,14 @@ BarWidget {
     settingsStatusText = ""
     settingsMode = true
     popupOpen = true
+    if (flick) flick.contentY = 0
     Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
   }
 
   function showUsage() {
     settingsMode = false
     settingsStatusText = ""
+    if (flick) flick.contentY = 0
     Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
   }
 
@@ -376,8 +378,18 @@ BarWidget {
     bar: root.bar
     open: root.popupOpen
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(390))
-    contentHeight: panel.fittedContentHeight(contentColumn.implicitHeight, Style.space(640))
+    contentWidth: root.settingsMode
+      ? panel.fittedContentWidth(Style.space(420))
+      : panel.fittedContentWidth(Style.space(390))
+    contentHeight: {
+      var headerH = (root.settingsMode ? settingsHeader.implicitHeight : statsHeader.implicitHeight) + panelSeparator.implicitHeight + 16
+      if (root.settingsMode) {
+        var settingsNeeded = headerH + settingsContent.implicitHeight + Style.space(32)
+        return panel.fittedContentHeight(Math.max(Style.space(380), settingsNeeded))
+      }
+      var statsNeeded = headerH + contentColumn.implicitHeight + Style.space(12)
+      return panel.fittedContentHeight(statsNeeded, Style.space(640))
+    }
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -404,17 +416,23 @@ BarWidget {
       }
 
       ColumnLayout {
+        id: panelMainColumn
         anchors.fill: parent
         spacing: 8
 
         Header {
+          id: statsHeader
           visible: !root.settingsMode && !!root.provider
           provider: root.provider
         }
 
-        SettingsHeader { visible: root.settingsMode }
+        SettingsHeader {
+          id: settingsHeader
+          visible: root.settingsMode
+        }
 
         PanelSeparator {
+          id: panelSeparator
           Layout.fillWidth: true
           foreground: root.foreground
         }
@@ -428,7 +446,9 @@ BarWidget {
           clip: true
           boundsBehavior: Flickable.StopAtBounds
           flickableDirection: Flickable.VerticalFlick
-          ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+          ScrollBar.vertical: ScrollBar {
+            policy: flick.contentHeight > (flick.height + 2) ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+          }
 
           ColumnLayout {
             id: contentColumn
@@ -1288,7 +1308,7 @@ BarWidget {
         Text {
           anchors.centerIn: parent
           textFormat: Text.PlainText
-          text: recentSessionsCardRoot.expanded ? "Show fewer sessions ▴" : ("Show all sessions (" + provider.recentSessions.length + ") ▾")
+          text: recentSessionsCardRoot.expanded ? "Show fewer sessions ▴" : ("Show all sessions (" + ((provider && provider.recentSessions) ? provider.recentSessions.length : 0) + ") ▾")
           color: moreMouse.containsMouse ? root.accent : root.dim
           font.family: fontFamily
           font.pixelSize: 9

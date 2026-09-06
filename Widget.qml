@@ -459,12 +459,8 @@ BarWidget {
     contentWidth: panel.fittedContentWidth(Style.space(390))
     contentHeight: {
       var headerH = (root.settingsMode ? settingsHeader.implicitHeight : statsHeader.implicitHeight) + panelSeparator.implicitHeight + 16
-      if (root.settingsMode) {
-        var settingsNeeded = headerH + settingsContent.implicitHeight + Style.space(24)
-        return panel.fittedContentHeight(Math.max(Style.space(480), settingsNeeded))
-      }
-      var statsNeeded = headerH + contentColumn.implicitHeight + Style.space(12)
-      return panel.fittedContentHeight(statsNeeded, Style.space(640))
+      var needed = headerH + contentColumn.implicitHeight + Style.space(12)
+      return panel.fittedContentHeight(needed, Style.space(640))
     }
 
     PanelKeyCatcher {

@@ -8,6 +8,7 @@ Item {
 
     property string providerId: "antigravity"
     property string providerName: "Antigravity"
+    property var settings: ({})
     property bool enabled: true
     property bool ready: false
     property bool refreshing: false
@@ -122,14 +123,20 @@ Item {
 
     function checkLowQuotaAlerts(quotaGroups) {
         if (!quotaGroups || !Array.isArray(quotaGroups)) return
+        var enableAlerts = (root.settings && root.settings.enableQuotaAlerts !== undefined) ? Boolean(root.settings.enableQuotaAlerts) : true
+        if (!enableAlerts) return
+
+        var thresholdPct = (root.settings && root.settings.quotaAlertThreshold !== undefined) ? Number(root.settings.quotaAlertThreshold) : 15
+        var thresholdFrac = Math.max(0.01, Math.min(1.0, (thresholdPct || 15) / 100.0))
         var now = Date.now()
+
         for (var i = 0; i < quotaGroups.length; i++) {
             var g = quotaGroups[i]
             var buckets = g.buckets || []
             for (var j = 0; j < buckets.length; j++) {
                 var b = buckets[j]
                 var remFrac = Number(b.remainingFraction !== undefined ? b.remainingFraction : 1.0)
-                if (remFrac <= 0.15) {
+                if (remFrac <= thresholdFrac) {
                     var key = (g.name || "") + ":" + (b.name || "")
                     var lastNotified = root.notifiedLowQuotas[key] || 0
                     if (now - lastNotified > 7200000) {

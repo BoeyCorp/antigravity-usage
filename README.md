@@ -11,14 +11,18 @@ Antigravity active session monitor, prompt metrics, tool telemetry, interactive 
   - 🟢 **Green (Pulsing)**: Agent is actively executing/thinking (`Working`).
   - 🔵 **Blue**: Session is open but waiting for user input (`Waiting`).
   - ⚪ **Transparent**: Idle (no active sessions).
-- **Active Sessions Counter Badge**: Dynamic badge pill showing the number of concurrent background sessions currently running. Automatically hides when idle for a clean, minimal bar.
+- **Configurable Bar Badge Mode**: Dynamic badge pill with configurable display modes:
+  - `active` (Default): Number of concurrent background sessions currently running (auto-hides when idle for a clean bar).
+  - `prompts`: Total prompts executed today (auto-hides when 0).
+  - `off`: Disables the badge completely for an ultra-minimal bar icon.
 - **Detailed Tooltip**: Hovering the bar widget shows active session status, today's prompt count, and current model.
 
 ### 2. Interactive Session Management
 - **Quick Terminal Resume**: Click any session card or press `1`–`5` to immediately resume that session in your terminal (`agy --conversation <id>`).
-- **New Session Launcher**: Click the `` header button or press `n` to launch a brand-new `agy` session in your default terminal.
+- **Terminal Emulator Override**: Configurable terminal command/binary override (e.g. `foot`, `ghostty`, `kitty`, `alacritty`, or custom command) with automatic working directory handoff, defaulting to `xdg-terminal-exec`.
+- **New Session Launcher**: Click the `` header button or press `n` to launch a brand-new `agy` session in your chosen terminal.
 - **Process Termination**: Hover over any running session and click the red `` button to terminate the session process cleanly (`SIGTERM`) and release its presence lock.
-- **Expandable Session History**: Toggle between 5 and 10 recent sessions, complete with styled workspace directory tags (` <ws>`), step counters, and relative timestamps.
+- **Configurable Recent Sessions**: Choose your preferred default display limit (3 to 10 sessions) with one-click expansion to view all recent sessions, complete with styled workspace tags (` <ws>`), step counters, and relative timestamps.
 
 ### 3. Model Usage Breakdown with Timeframe Toggle
 - **Timeframe Switcher**: Interactive segmented pill toggle in the top-right corner to switch between:
@@ -31,7 +35,7 @@ Antigravity active session monitor, prompt metrics, tool telemetry, interactive 
 ### 4. Quota Limits & Desktop Alerts
 - **Real-Time Quota Buckets**: Live quota information fetched from `agy /usage` (Gemini Weekly & 5-Hour limits, Claude/GPT Weekly & 5-Hour limits).
 - **Dual Reset Time Display**: Shows both relative countdown timers (e.g. `2h 15m`) and exact local wall-clock times (e.g. `04:15 AM`).
-- **Low Quota Desktop Notifications**: Automatically triggers an `omarchy-notification-send` alert when any quota bucket falls below 15% remaining (with a 2-hour per-bucket rate-limiting cooldown).
+- **Configurable Low Quota Alerts**: Toggle desktop notifications on/off and configure custom remaining percentage thresholds (5% to 50%, default 15%) via `omarchy-notification-send` (with 2-hour per-bucket rate-limiting cooldown).
 
 ### 5. Performance & Telemetry
 - **Adaptive Polling**: Automatically scales refresh frequency from 60s idle down to 3s when an active session is working, then returns to 60s when idle.
@@ -119,12 +123,16 @@ rm -f ~/.local/bin/omarchy-agent-usage-antigravity
 
 ## Configuration
 
-Configuration lives in `~/.config/omarchy/shell.json` or can be adjusted via the widget's in-popup settings view (right-click or `s` key):
+Configuration lives in `~/.config/omarchy/shell.json` or can be adjusted directly in the widget's in-popup settings view (right-click or press `s`):
 
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `refreshIntervalSec` | integer (10–1800) | `60` | Telemetry refresh rate in seconds (adaptively scales to 3s when active) |
-| `showBadge` | boolean | `true` | Show active sessions counter badge on the bar icon (auto-hides when idle) |
+| `badgeMode` | enum (`active`, `prompts`, `off`) | `"active"` | Bar badge display mode (`active` sessions count, today's `prompts`, or disabled `off`) |
+| `enableQuotaAlerts` | boolean | `true` | Send desktop notifications when model quota falls below threshold |
+| `quotaAlertThreshold` | integer (5–50) | `15` | Low quota percentage alert threshold |
+| `terminalCommand` | string | `""` | Terminal emulator command override (`foot`, `ghostty`, `kitty`, `alacritty`, or blank for `xdg-terminal-exec`) |
+| `recentSessionsLimit` | integer (3–10) | `5` | Initial number of recent sessions to display before expanding |
 
 ---
 

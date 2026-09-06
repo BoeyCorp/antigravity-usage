@@ -64,13 +64,56 @@ BarWidget {
     usageMain.refreshAll(true)
   }
 
-  function resumeSession(conversationId, workspacePath) {
-    if (!conversationId) return
+  function getTerminalArgs(cmdArgs, workspacePath) {
+    var termSetting = (root.settings && root.settings.terminalCommand) ? String(root.settings.terminalCommand).trim() : ""
     var ws = workspacePath || ""
     if (ws.indexOf("file://") === 0) ws = decodeURIComponent(ws.substring(7))
-    var args = ["xdg-terminal-exec"]
-    if (ws) args.push("--dir=" + ws)
-    args.push("--", "agy", "--conversation", conversationId)
+
+    if (!termSetting) {
+      var args = ["xdg-terminal-exec"]
+      if (ws) args.push("--dir=" + ws)
+      args.push("--")
+      return args.concat(cmdArgs)
+    }
+
+    var parts = termSetting.split(/\s+/).filter(function(p) { return p.length > 0 })
+    if (parts.length === 0) {
+      var args = ["xdg-terminal-exec"]
+      if (ws) args.push("--dir=" + ws)
+      args.push("--")
+      return args.concat(cmdArgs)
+    }
+
+    var bin = parts[0].split("/").pop()
+    if (bin === "xdg-terminal-exec") {
+      if (ws) parts.push("--dir=" + ws)
+      parts.push("--")
+      return parts.concat(cmdArgs)
+    } else if (bin === "foot") {
+      if (ws) parts.push("-D", ws)
+      return parts.concat(cmdArgs)
+    } else if (bin === "kitty") {
+      if (ws) parts.push("-d", ws)
+      return parts.concat(cmdArgs)
+    } else if (bin === "ghostty") {
+      if (ws) parts.push("--working-directory=" + ws)
+      if (parts.indexOf("-e") === -1) parts.push("-e")
+      return parts.concat(cmdArgs)
+    } else if (bin === "alacritty") {
+      if (ws) parts.push("--working-directory", ws)
+      if (parts.indexOf("-e") === -1) parts.push("-e")
+      return parts.concat(cmdArgs)
+    } else {
+      if (parts.indexOf("-e") !== -1 || parts.indexOf("--") !== -1) {
+        return parts.concat(cmdArgs)
+      }
+      return parts.concat(["-e"]).concat(cmdArgs)
+    }
+  }
+
+  function resumeSession(conversationId, workspacePath) {
+    if (!conversationId) return
+    var args = getTerminalArgs(["agy", "--conversation", conversationId], workspacePath)
     try {
       Quickshell.execDetached(["uwsm-app", "--"].concat(args))
     } catch (e) {
@@ -80,7 +123,7 @@ BarWidget {
   }
 
   function newSession() {
-    var args = ["xdg-terminal-exec", "--", "agy"]
+    var args = getTerminalArgs(["agy"], "")
     try {
       Quickshell.execDetached(["uwsm-app", "--"].concat(args))
     } catch (e) {
@@ -126,14 +169,41 @@ BarWidget {
   }
 
   function defaultSettings() {
-    return { refreshIntervalSec: 60, showBadge: true }
+    return {
+      refreshIntervalSec: 60,
+      badgeMode: "active",
+      showBadge: true,
+      enableQuotaAlerts: true,
+      quotaAlertThreshold: 15,
+      terminalCommand: "",
+      recentSessionsLimit: 5
+    }
   }
 
   function normalizedSettings(source) {
     var next = cloneObject(source, {}) || {}
     var refresh = Number(next.refreshIntervalSec === undefined || next.refreshIntervalSec === null ? 60 : next.refreshIntervalSec)
     next.refreshIntervalSec = Math.round(clamp(isFinite(refresh) ? refresh : 60, 10, 1800))
-    next.showBadge = next.showBadge !== false
+
+    if (next.badgeMode !== undefined && next.badgeMode !== null) {
+      var bm = String(next.badgeMode).toLowerCase().trim()
+      if (bm !== "active" && bm !== "prompts" && bm !== "off") bm = "active"
+      next.badgeMode = bm
+      next.showBadge = bm !== "off"
+    } else {
+      next.showBadge = next.showBadge !== false
+      next.badgeMode = next.showBadge ? "active" : "off"
+    }
+
+    next.enableQuotaAlerts = next.enableQuotaAlerts !== false
+    var thresh = Number(next.quotaAlertThreshold === undefined || next.quotaAlertThreshold === null ? 15 : next.quotaAlertThreshold)
+    next.quotaAlertThreshold = Math.round(clamp(isFinite(thresh) ? thresh : 15, 5, 50))
+
+    next.terminalCommand = next.terminalCommand ? String(next.terminalCommand).trim() : ""
+
+    var limit = Number(next.recentSessionsLimit === undefined || next.recentSessionsLimit === null ? 5 : next.recentSessionsLimit)
+    next.recentSessionsLimit = Math.round(clamp(isFinite(limit) ? limit : 5, 3, 10))
+
     return next
   }
 
@@ -264,14 +334,22 @@ BarWidget {
     id: chip
 
     readonly property bool tooltipHovered: mouseArea.containsMouse
-    readonly property bool showBadge: (root.settings && root.settings.showBadge !== false)
+    readonly property string badgeMode: {
+      if (root.settings && root.settings.badgeMode !== undefined && root.settings.badgeMode !== null)
+        return String(root.settings.badgeMode).toLowerCase()
+      if (root.settings && root.settings.showBadge === false)
+        return "off"
+      return "active"
+    }
     readonly property int activeCount: {
       if (!provider) return 0
       if (provider.activeSessions && Array.isArray(provider.activeSessions))
         return provider.activeSessions.length
       return provider.hasActiveSession ? 1 : 0
     }
-    readonly property bool hasBadge: showBadge && activeCount > 0
+    readonly property int promptCount: provider ? (provider.todayPrompts || 0) : 0
+    readonly property int badgeCount: badgeMode === "prompts" ? promptCount : (badgeMode === "active" ? activeCount : 0)
+    readonly property bool hasBadge: badgeMode !== "off" && badgeCount > 0
 
     width: hasBadge ? (13 + badgeText.implicitWidth + 10) : root.barSize
     height: root.barSize
@@ -319,7 +397,7 @@ BarWidget {
         id: badgeText
         visible: chip.hasBadge
         textFormat: Text.PlainText
-        text: String(chip.activeCount)
+        text: String(chip.badgeCount)
         color: root.isWorking ? "#10B981" : (root.isWaiting ? "#3B82F6" : root.dim)
         font.family: root.fontFamily
         font.pixelSize: 9
@@ -384,8 +462,8 @@ BarWidget {
     contentHeight: {
       var headerH = (root.settingsMode ? settingsHeader.implicitHeight : statsHeader.implicitHeight) + panelSeparator.implicitHeight + 16
       if (root.settingsMode) {
-        var settingsNeeded = headerH + settingsContent.implicitHeight + Style.space(32)
-        return panel.fittedContentHeight(Math.max(Style.space(380), settingsNeeded))
+        var settingsNeeded = headerH + settingsContent.implicitHeight + Style.space(24)
+        return panel.fittedContentHeight(Math.max(Style.space(480), settingsNeeded))
       }
       var statsNeeded = headerH + contentColumn.implicitHeight + Style.space(12)
       return panel.fittedContentHeight(statsNeeded, Style.space(640))
@@ -1137,6 +1215,7 @@ BarWidget {
     id: recentSessionsCardRoot
     property var provider: null
     property bool expanded: false
+    readonly property int defaultLimit: Math.max(3, Math.min(10, Number(root.settings ? root.settings.recentSessionsLimit : 5) || 5))
     visible: !!provider && provider.recentSessions && provider.recentSessions.length > 0
     title: "Recent Sessions"
     subtitle: "Click or press 1-" + Math.min(5, (provider ? (provider.recentSessions || []).length : 0)) + " to resume"
@@ -1147,7 +1226,7 @@ BarWidget {
 
       Repeater {
         id: sessionRepeater
-        model: provider ? (provider.recentSessions || []).slice(0, recentSessionsCardRoot.expanded ? 10 : 5) : []
+        model: provider ? (provider.recentSessions || []).slice(0, recentSessionsCardRoot.expanded ? 10 : recentSessionsCardRoot.defaultLimit) : []
         delegate: ColumnLayout {
           required property var modelData
           required property int index
@@ -1301,7 +1380,7 @@ BarWidget {
       }
 
       Item {
-        visible: !!provider && provider.recentSessions && provider.recentSessions.length > 5
+        visible: !!provider && provider.recentSessions && provider.recentSessions.length > recentSessionsCardRoot.defaultLimit
         Layout.fillWidth: true
         implicitHeight: 18
 
@@ -1347,10 +1426,16 @@ BarWidget {
     Layout.fillWidth: true
     spacing: 10
 
-    readonly property bool editorActive: refreshIntervalField.field.activeFocus
+    readonly property bool editorActive: Boolean(
+      (refreshIntervalField && refreshIntervalField.field && refreshIntervalField.field.activeFocus)
+      || (alertThresholdField && alertThresholdField.field && alertThresholdField.field.activeFocus)
+      || (recentSessionsLimitField && recentSessionsLimitField.field && recentSessionsLimitField.field.activeFocus)
+      || (terminalField && terminalField.activeFocus)
+    )
 
     SectionCard {
       title: "Refresh Interval"
+      subtitle: "Telemetry and quota polling rate (scales to 3s when active)"
 
       ColumnLayout {
         width: parent.width
@@ -1373,7 +1458,35 @@ BarWidget {
     }
 
     SectionCard {
-      title: "Bar Display"
+      title: "Bar Badge Mode"
+      subtitle: "Choose what metric is displayed on the Omarchy bar badge"
+
+      ColumnLayout {
+        width: parent.width
+        spacing: 8
+
+        ButtonGroup {
+          foreground: root.foreground
+          accent: root.accent
+          fontFamily: root.fontFamily
+          fontSize: 10
+          options: [
+            { value: "active", label: "Active Sessions" },
+            { value: "prompts", label: "Today's Prompts" },
+            { value: "off", label: "Off" }
+          ]
+          value: root.draftValue("badgeMode", root.draftValue("showBadge", true) === false ? "off" : "active")
+          onChanged: function(v) {
+            root.setDraftValue("badgeMode", v)
+            root.setDraftValue("showBadge", v !== "off")
+          }
+        }
+      }
+    }
+
+    SectionCard {
+      title: "Low Quota Desktop Alerts"
+      subtitle: "Notify via desktop notifications when any quota falls below threshold"
 
       ColumnLayout {
         width: parent.width
@@ -1386,16 +1499,97 @@ BarWidget {
           Text {
             textFormat: Text.PlainText
             Layout.fillWidth: true
-            text: "Show active sessions badge in bar"
-            color: foreground
-            font.family: fontFamily
+            text: "Enable low quota desktop alerts"
+            color: root.foreground
+            font.family: root.fontFamily
             font.pixelSize: 11
           }
 
           ToggleSwitch {
-            checked: root.draftValue("showBadge", true) !== false
-            onToggled: root.setDraftValue("showBadge", checked)
+            checked: root.draftValue("enableQuotaAlerts", true) !== false
+            onToggled: root.setDraftValue("enableQuotaAlerts", checked)
           }
+        }
+
+        NumberField {
+          id: alertThresholdField
+          Layout.fillWidth: true
+          label: "Alert threshold (% quota remaining)"
+          value: Number(root.draftValue("quotaAlertThreshold", 15))
+          from: 5
+          to: 50
+          stepSize: 5
+          fieldWidth: parent.width
+          foreground: root.foreground
+          accent: Color.accent
+          fontFamily: root.fontFamily
+          enabled: root.draftValue("enableQuotaAlerts", true) !== false
+          opacity: enabled ? 1.0 : 0.45
+          onModified: function(value) { root.setDraftValue("quotaAlertThreshold", value) }
+        }
+      }
+    }
+
+    SectionCard {
+      title: "Terminal Emulator Override"
+      subtitle: "Command used to launch or resume sessions"
+
+      ColumnLayout {
+        width: parent.width
+        spacing: 6
+
+        TextField {
+          id: terminalField
+          Layout.fillWidth: true
+          placeholderText: "Default: xdg-terminal-exec"
+          text: String(root.draftValue("terminalCommand", ""))
+          foreground: root.foreground
+          accent: root.accent
+          font.family: root.fontFamily
+          font.pixelSize: 11
+          onTextEdited: root.setDraftValue("terminalCommand", text)
+
+          Connections {
+            target: root
+            function onDraftSettingsChanged() {
+              terminalField.text = String(root.draftValue("terminalCommand", ""))
+            }
+          }
+        }
+
+        Text {
+          textFormat: Text.PlainText
+          Layout.fillWidth: true
+          text: "Leave blank for system default. Supports foot, ghostty, kitty, alacritty, or custom command."
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: 9
+          wrapMode: Text.WordWrap
+        }
+      }
+    }
+
+    SectionCard {
+      title: "Default Recent Sessions Count"
+      subtitle: "Number of recent sessions shown before expanding"
+
+      ColumnLayout {
+        width: parent.width
+        spacing: 8
+
+        NumberField {
+          id: recentSessionsLimitField
+          Layout.fillWidth: true
+          label: "Initial display count (3 - 10)"
+          value: Number(root.draftValue("recentSessionsLimit", 5))
+          from: 3
+          to: 10
+          stepSize: 1
+          fieldWidth: parent.width
+          foreground: root.foreground
+          accent: Color.accent
+          fontFamily: root.fontFamily
+          onModified: function(value) { root.setDraftValue("recentSessionsLimit", value) }
         }
       }
     }
@@ -1405,8 +1599,8 @@ BarWidget {
       visible: root.settingsStatusText !== ""
       Layout.fillWidth: true
       text: root.settingsStatusText
-      color: dim
-      font.family: fontFamily
+      color: root.dim
+      font.family: root.fontFamily
       font.pixelSize: 10
       horizontalAlignment: Text.AlignHCenter
     }
@@ -1415,8 +1609,8 @@ BarWidget {
       textFormat: Text.PlainText
       Layout.fillWidth: true
       text: "s saves · esc closes"
-      color: dim
-      font.family: fontFamily
+      color: root.dim
+      font.family: root.fontFamily
       font.pixelSize: 10
       horizontalAlignment: Text.AlignHCenter
     }

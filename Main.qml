@@ -11,6 +11,7 @@ Item {
     Antigravity {
         id: antigravityProvider
         enabled: true
+        settings: root.settings
     }
 
     property var provider: antigravityProvider

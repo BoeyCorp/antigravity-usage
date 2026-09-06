@@ -456,9 +456,7 @@ BarWidget {
     bar: root.bar
     open: root.popupOpen
     focusTarget: keyCatcher
-    contentWidth: root.settingsMode
-      ? panel.fittedContentWidth(Style.space(420))
-      : panel.fittedContentWidth(Style.space(390))
+    contentWidth: panel.fittedContentWidth(Style.space(390))
     contentHeight: {
       var headerH = (root.settingsMode ? settingsHeader.implicitHeight : statsHeader.implicitHeight) + panelSeparator.implicitHeight + 16
       if (root.settingsMode) {

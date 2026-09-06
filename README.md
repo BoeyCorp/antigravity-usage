@@ -1,29 +1,58 @@
 # Antigravity Usage for Omarchy
 
-Antigravity active session monitor, prompt metrics, tool telemetry, and 7-day usage stats in the Omarchy top bar.
+Antigravity active session monitor, prompt metrics, tool telemetry, interactive session launcher, and 7-day usage stats in the Omarchy top bar.
 
 ![preview](preview.png)
 
 ## Features
 
-- **Live Status & Pulse**: Visual status indicator (pulsing green/blue dot) in the Omarchy bar showing when an Antigravity agent is active, working, or idle.
-- **Today & Totals with Live Quota & Model Breakdown**:
-  - Top summary cards: Prompts today, steps today, and all-time totals.
-  - **Live Quota Limits Bar Graphs**: Real-time quota buckets fetched directly from `agy /usage` (Gemini Models weekly/5h limits, Claude & GPT models weekly/5h limits) with dynamic countdown reset timers, remaining percentage, and health-based color transitions.
-  - **Model Usage Breakdown Bar Graphs**: Visual volume and activity share bars for all active models (Gemini Flash/Pro, Claude Sonnet/Opus, etc.) with prompt and step counters.
-- **7-Day Activity Chart**: Visual bar chart of prompt volume over the last 7 days with date headers.
-- **Tool Telemetry Breakdown**: Live counter of tool calls (`run_command`, `write_to_file`, `replace_file_content`, `view_file`, `grep_search`, `find_by_name`, `subagents`, etc.).
-- **Active & Recent Sessions**: Preview of current tasks, workspace names, step progress, and session status.
-- **Fast Smart Caching**: Sub-second responsiveness using an intelligent cache for `agy /usage` with on-demand `--force` refresh.
-- **Dual Omarchy Integration**:
-  1. Standalone Bar Widget with rich QML popup modal (`jesseburlamaque.antigravity-usage`).
-  2. Native Omarchy Agents panel collector (`bin/omarchy-agent-usage-antigravity`).
+### 1. Status Bar Icon & Live Badge
+- **State Pulse Indicator**: Color-coded pulse dot indicating real-time agent activity:
+  - 🟢 **Green (Pulsing)**: Agent is actively executing/thinking (`Working`).
+  - 🔵 **Blue**: Session is open but waiting for user input (`Waiting`).
+  - ⚪ **Transparent**: Idle (no active sessions).
+- **Active Sessions Counter Badge**: Dynamic badge pill showing the number of concurrent background sessions currently running. Automatically hides when idle for a clean, minimal bar.
+- **Detailed Tooltip**: Hovering the bar widget shows active session status, today's prompt count, and current model.
+
+### 2. Interactive Session Management
+- **Quick Terminal Resume**: Click any session card or press `1`–`5` to immediately resume that session in your terminal (`agy --conversation <id>`).
+- **New Session Launcher**: Click the `` header button or press `n` to launch a brand-new `agy` session in your default terminal.
+- **Process Termination**: Hover over any running session and click the red `` button to terminate the session process cleanly (`SIGTERM`) and release its presence lock.
+- **Expandable Session History**: Toggle between 5 and 10 recent sessions, complete with styled workspace directory tags (` <ws>`), step counters, and relative timestamps.
+
+### 3. Model Usage Breakdown with Timeframe Toggle
+- **Timeframe Switcher**: Interactive segmented pill toggle in the top-right corner to switch between:
+  - **Today**: Prompt and step counts for the current calendar day.
+  - **Last 7 Days**: Usage aggregated across the past week.
+  - **All time**: All-time cumulative model usage.
+- **Dynamic Sorting & Animated Visuals**: Models automatically re-sort by activity in the selected timeframe, and progress bars smoothly animate (`Easing.OutCubic`) to reflect proportional usage share.
+- **Consistent Metrics**: Clean, uniform `X prompts · Y steps` formatting across all models and timeframes.
+
+### 4. Quota Limits & Desktop Alerts
+- **Real-Time Quota Buckets**: Live quota information fetched from `agy /usage` (Gemini Weekly & 5-Hour limits, Claude/GPT Weekly & 5-Hour limits).
+- **Dual Reset Time Display**: Shows both relative countdown timers (e.g. `2h 15m`) and exact local wall-clock times (e.g. `04:15 AM`).
+- **Low Quota Desktop Notifications**: Automatically triggers an `omarchy-notification-send` alert when any quota bucket falls below 15% remaining (with a 2-hour per-bucket rate-limiting cooldown).
+
+### 5. Performance & Telemetry
+- **Adaptive Polling**: Automatically scales refresh frequency from 60s idle down to 3s when an active session is working, then returns to 60s when idle.
+- **Today & Totals Summary**: Quick stats for prompts today, steps today, total prompts, and total steps.
+- **7-Day Activity Chart**: Daily prompt activity visualization across the past week.
+- **Tool Telemetry Breakdown**: Live call counters for tools (`run_command`, `write_to_file`, `replace_file_content`, `view_file`, `grep_search`, `find_by_name`, `subagents`, etc.).
+- **Smart Caching & Lock Pruning**: High-speed responses with local quota caching and automatic pruning of unheld presence locks older than 48 hours.
+
+### 6. Dual Omarchy Integration
+- **Standalone Bar Widget**: Full-featured QML popup panel (`jesseburlamaque.antigravity-usage`).
+- **Native Agents Panel Collector**: Includes companion binary (`bin/omarchy-agent-usage-antigravity`) compatible with Omarchy's system-wide `omarchy.agents` contract (`--limits-only`).
+
+---
 
 ## Requirements
 
-- Python 3 (standard library: `sqlite3`, `json`, `datetime`, `pathlib`, `collections`, `subprocess`, `shutil`)
+- Python 3 (standard library: `sqlite3`, `json`, `datetime`, `pathlib`, `collections`, `subprocess`, `shutil`, `fcntl`)
 - Google Antigravity (`agy` CLI / IDE) with local session data in `~/.gemini/antigravity-cli`
 - Omarchy Shell / Quickshell
+
+---
 
 ## Installation
 
@@ -41,12 +70,16 @@ mkdir -p ~/.local/bin
 ln -sf ~/.config/omarchy/plugins/jesseburlamaque.antigravity-usage/bin/omarchy-agent-usage-antigravity ~/.local/bin/omarchy-agent-usage-antigravity
 ```
 
+---
+
 ## Update
 
 ```sh
 omarchy plugin update jesseburlamaque.antigravity-usage --yes
 omarchy restart shell
 ```
+
+---
 
 ## Removal
 
@@ -63,38 +96,47 @@ If you configured the optional Agents panel integration:
 rm -f ~/.local/bin/omarchy-agent-usage-antigravity
 ```
 
-## Interactions
+---
 
-- **Left Click**: Open/close popup panel with stats, charts, and recent sessions.
-- **Middle Click**: Force immediate refresh of telemetry and quota data.
-- **Right Click**: Open in-popup settings view.
-- **Keyboard Shortcuts** (when popup is open):
-  - `1`–`5`: Quick-resume the corresponding recent session directly in your terminal.
-  - `n`: Start a brand-new `agy` session in your terminal.
-  - `r`: Force refresh live quota and usage data.
-  - `s`: Toggle between Stats and Settings view.
-  - `q` or `Esc`: Close popup.
-- **Session Management**:
-  - **Quick Resume**: Click any session card or press its `[1]`–`[5]` numeric shortcut to open it in terminal (`agy --conversation <id>`).
-  - **Kill Active Process**: Hover over an active session and click the red `` button to terminate the session process cleanly (`SIGTERM`).
-  - **Expand / Collapse**: Click "Show all sessions" to view up to 10 recent sessions with workspace pill tags.
+## Interactions & Shortcuts
 
-## Features
+### Mouse Controls
+- **Left Click**: Open/close popup panel.
+- **Middle Click**: Force immediate telemetry and quota refresh.
+- **Right Click**: Toggle in-popup settings view.
 
-- **Status Bar Icon & Live Badge**: Color-coded pulse dot indicating session status (green = active/working, blue = waiting for input) and active sessions count badge (auto-hides when idle).
-- **Adaptive Polling**: Auto-scales refresh frequency from 60s idle down to 3s when an active session is working, then returns to 60s when idle.
-- **Exact Reset Times**: Displays both relative countdowns (e.g. `2h 15m`) and exact local wall-clock reset times (e.g. `04:15 AM`).
-- **Desktop Quota Alerts**: Proactive desktop notification alerts when any quota bucket drops below 15% remaining (with intelligent 2-hour per-bucket rate-limiting).
-- **System-Wide Agent Usage Integration**: Fully compatible with Omarchy's `omarchy-agent-usage-antigravity` provider contract (`--limits-only`).
+### Keyboard Shortcuts (when popup is open)
+| Shortcut | Action |
+|---|---|
+| `1`–`5` | Quick-resume the corresponding recent session in terminal |
+| `n` | Launch a new `agy` terminal session |
+| `r` | Force refresh telemetry and quota limits |
+| `s` | Toggle between Stats and Settings view (or save settings) |
+| `j` / `k` | Scroll popup content down / up |
+| `q` or `Esc` | Close popup panel |
+
+---
 
 ## Configuration
 
-Configuration lives in `~/.config/omarchy/shell.json`.
+Configuration lives in `~/.config/omarchy/shell.json` or can be adjusted via the widget's in-popup settings view (right-click or `s` key):
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `refreshIntervalSec` | integer (10–1800) | `60` | Telemetry refresh rate in seconds (adaptive to 3s while active) |
-| `showBadge` | boolean | `true` | Show active sessions badge in the bar widget (hidden when idle) |
+| `refreshIntervalSec` | integer (10–1800) | `60` | Telemetry refresh rate in seconds (adaptively scales to 3s when active) |
+| `showBadge` | boolean | `true` | Show active sessions counter badge on the bar icon (auto-hides when idle) |
+
+---
+
+## Development & Testing
+
+Run the automated test suite verifying lock detection, plain-text sanitization, and telemetry schema contracts:
+
+```sh
+python3 -m unittest discover -s tests
+```
+
+---
 
 ## License
 

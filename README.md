@@ -61,7 +61,7 @@ Antigravity active session monitor, prompt metrics, tool telemetry, interactive 
 ## Installation
 
 ```sh
-omarchy plugin add https://github.com/BoeyCorp/antigravity-usage.git --enable
+omarchy plugin add https://github.com/jesseburlamaque/antigravity-usage.git --enable
 omarchy restart shell
 ```
 
@@ -148,4 +148,4 @@ python3 -m unittest discover -s tests
 
 ## License
 
-MIT © BoeyCorp (Forked and enhanced from original by Jesse Burlamaque)
+MIT © Jesse Burlamaque & contributors

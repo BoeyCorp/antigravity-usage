@@ -3,7 +3,7 @@
   "id": "jesseburlamaque.antigravity-usage",
   "name": "Antigravity Usage",
   "version": "1.2.0",
-  "author": "BoeyCorp (original by Jesse Burlamaque)",
+  "author": "Jesse Burlamaque & contributors",
   "license": "MIT",
   "description": "Antigravity active sessions, live quota metrics (/usage), model breakdown, prompt history, and tool telemetry in the Omarchy bar.",
   "kinds": ["bar-widget"],

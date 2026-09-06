@@ -156,12 +156,30 @@ def parse_history_file(history_path: Path, recent_dates: list[str]) -> tuple[dic
     return daily_prompts, total_prompts, recent_prompts, workspace_counter
 
 
+def get_flocked_inodes() -> set[int] | None:
+    """Return set of inodes that have active FLOCK advisory write locks in /proc/locks."""
+    try:
+        locked = set()
+        with open("/proc/locks", "r") as f:
+            for line in f:
+                parts = line.split()
+                # Format: 24: FLOCK ADVISORY WRITE <pid> 00:1e:<inode> 0 EOF
+                if len(parts) >= 6 and parts[1] == "FLOCK" and parts[3] == "WRITE":
+                    dev_ino = parts[5].split(":")
+                    if len(dev_ino) == 3:
+                        locked.add(int(dev_ino[2]))
+        return locked
+    except Exception:
+        return None
+
+
 def parse_presence(presence_dir: Path, prune_stale: bool = True) -> set[str]:
     """Return set of conversation IDs whose presence locks are actively held by running processes."""
     active_ids = set()
     if not presence_dir.exists():
         return active_ids
 
+    flocked_inodes = get_flocked_inodes()
     now = time.time()
     for p in presence_dir.glob("*.lock"):
         cid = sanitize_plain_text(p.stem, 100)
@@ -170,18 +188,33 @@ def parse_presence(presence_dir: Path, prune_stale: bool = True) -> set[str]:
         try:
             with open(p, "rb") as f:
                 try:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    # Succeeded in acquiring exclusive lock: no active process holds it (stale file)
+                    # Test lock using non-blocking shared lock (LOCK_SH).
+                    # Running agy processes hold an exclusive write lock (LOCK_EX),
+                    # so LOCK_SH will fail with BlockingIOError if and only if agy holds it.
+                    # Multiple concurrent scanner processes (e.g. across multiple monitors)
+                    # can acquire LOCK_SH simultaneously without blocking each other.
+                    fcntl.flock(f.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    # Succeeded in acquiring shared lock: no active process holds it (stale file)
                     fcntl.flock(f.fileno(), fcntl.LOCK_UN)
                     # Prune stale locks older than 48 hours to keep directory clean
                     if prune_stale and (now - p.stat().st_mtime > 48 * 3600):
                         try:
+                            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                             p.unlink(missing_ok=True)
+                            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
                         except Exception:
                             pass
                 except (BlockingIOError, PermissionError, OSError):
-                    # Lock is actively held by a running agy process!
-                    active_ids.add(cid)
+                    # An exclusive lock is held! Verify against /proc/locks if available
+                    # to guard against any transient contention.
+                    if flocked_inodes is not None:
+                        try:
+                            if p.stat().st_ino in flocked_inodes:
+                                active_ids.add(cid)
+                        except Exception:
+                            active_ids.add(cid)
+                    else:
+                        active_ids.add(cid)
         except Exception:
             pass
     return active_ids
@@ -565,6 +598,19 @@ def scan(base_dir: Path, force: bool = False) -> dict[str, Any]:
     if not base_dir.exists():
         return empty_result()
 
+    # Deduplicate concurrent scans across multi-monitor setups (TTL: 1.5s)
+    scan_cache_path = base_dir / "cache" / "scanner_cache.json"
+    if not force and scan_cache_path.exists():
+        try:
+            mtime = scan_cache_path.stat().st_mtime
+            if time.time() - mtime < 1.5:
+                with open(scan_cache_path, "r", encoding="utf-8") as f:
+                    cached = json.load(f)
+                    if isinstance(cached, dict) and cached.get("ready"):
+                        return cached
+        except Exception:
+            pass
+
     db_path = base_dir / "conversation_summaries.db"
     history_path = base_dir / "history.jsonl"
     presence_dir = base_dir / "presence"
@@ -824,7 +870,7 @@ def scan(base_dir: Path, force: bool = False) -> dict[str, Any]:
 
     clean_latest_model = sanitize_plain_text(latest_model, 80)
 
-    return {
+    result = {
         "schemaVersion": 1,
         "id": "antigravity",
         "name": "Antigravity",
@@ -856,6 +902,18 @@ def scan(base_dir: Path, force: bool = False) -> dict[str, Any]:
         "usageStatusText": f"{active_status} • {clean_latest_model}",
         "authHelpText": ""
     }
+
+    # Save to short-lived cache for concurrent monitor deduplication
+    try:
+        scan_cache_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_cache = scan_cache_path.with_suffix(".tmp")
+        with open(tmp_cache, "w", encoding="utf-8") as f:
+            json.dump(result, f)
+        tmp_cache.replace(scan_cache_path)
+    except Exception:
+        pass
+
+    return result
 
 
 scan_antigravity = scan

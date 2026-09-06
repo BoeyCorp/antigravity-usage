@@ -52,6 +52,35 @@ class TestAntigravityScanner(unittest.TestCase):
             active_after = parse_presence(pdir, prune_stale=False)
             self.assertNotIn("held_session", active_after)
 
+    def test_concurrent_presence_detection(self):
+        """Verify concurrent multi-monitor scans do not cause false active sessions on stale lock files."""
+        import concurrent.futures
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pdir = Path(tmpdir)
+            lock_held = pdir / "active_real.lock"
+            lock_held.touch()
+            # Create several stale lock files
+            for i in range(10):
+                (pdir / f"stale_{i}.lock").touch()
+
+            # Hold exclusive lock on the one real active session
+            f = open(lock_held, "rb")
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            try:
+                def run_check():
+                    return parse_presence(pdir, prune_stale=False)
+
+                # Simulate 8 concurrent monitor/widget threads checking presence simultaneously
+                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+                    futures = [ex.submit(run_check) for _ in range(20)]
+                    for fut in futures:
+                        res = fut.result()
+                        self.assertEqual(res, {"active_real"}, "Concurrent presence checks must not falsely report stale locks as active")
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                f.close()
+
     def test_scan_contract(self):
         base_dir = default_base_dir()
         data = scan(base_dir)

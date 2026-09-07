@@ -8,6 +8,7 @@ Item {
 
     property string providerId: "antigravity"
     property string providerName: "Antigravity"
+    property var settings: ({})
     property bool enabled: true
     property bool ready: false
     property bool refreshing: false
@@ -35,6 +36,8 @@ Item {
     property var toolUsage: ({})
     property var modelUsage: ({})
     property var limits: []
+    property var quotaGroups: []
+    property var modelList: []
     property var recentWorkspaces: []
 
     property bool hasLocalStats: false
@@ -100,15 +103,55 @@ Item {
             root.recentSessions = data.recentSessions || []
             root.toolUsage = data.toolUsage || ({})
             root.modelUsage = data.modelUsage || ({})
+            root.modelList = data.modelList || []
             root.limits = data.limits || []
+            root.quotaGroups = data.quotaGroups || []
             root.recentWorkspaces = data.recentWorkspaces || []
 
             root.usageStatusText = data.usageStatusText || ""
             root.authHelpText = data.authHelpText || ""
+
+            root.checkLowQuotaAlerts(data.quotaGroups)
         } catch (e) {
             root.usageStatusText = "Scanner error"
             root.authHelpText = String(e)
             console.error("antigravity-usage", "Failed to parse scanner output:", e)
+        }
+    }
+
+    property var notifiedLowQuotas: ({})
+
+    function checkLowQuotaAlerts(quotaGroups) {
+        if (!quotaGroups || !Array.isArray(quotaGroups)) return
+        var enableAlerts = (root.settings && root.settings.enableQuotaAlerts !== undefined) ? Boolean(root.settings.enableQuotaAlerts) : true
+        if (!enableAlerts) return
+
+        var thresholdPct = (root.settings && root.settings.quotaAlertThreshold !== undefined) ? Number(root.settings.quotaAlertThreshold) : 15
+        var thresholdFrac = Math.max(0.01, Math.min(1.0, (thresholdPct || 15) / 100.0))
+        var now = Date.now()
+
+        for (var i = 0; i < quotaGroups.length; i++) {
+            var g = quotaGroups[i]
+            var buckets = g.buckets || []
+            for (var j = 0; j < buckets.length; j++) {
+                var b = buckets[j]
+                var remFrac = Number(b.remainingFraction !== undefined ? b.remainingFraction : 1.0)
+                if (remFrac <= thresholdFrac) {
+                    var key = (g.name || "") + ":" + (b.name || "")
+                    var lastNotified = root.notifiedLowQuotas[key] || 0
+                    if (now - lastNotified > 7200000) {
+                        root.notifiedLowQuotas[key] = now
+                        var pct = Math.round(remFrac * 100)
+                        try {
+                            Quickshell.execDetached([
+                                "omarchy-notification-send",
+                                "Antigravity Quota Low (" + pct + "% remaining)",
+                                (g.name || "Model") + " " + (b.label || b.name || "") + " has " + pct + "% quota remaining."
+                            ])
+                        } catch (e) {}
+                    }
+                }
+            }
         }
     }
 
@@ -117,7 +160,11 @@ Item {
             return
 
         root.refreshing = true
-        scanner.command = ["python3", root.scannerScriptPath]
+        var cmd = ["python3", root.scannerScriptPath]
+        if (force === true) {
+            cmd.push("--force")
+        }
+        scanner.command = cmd
         scanner.running = true
     }
 }

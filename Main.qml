@@ -11,6 +11,7 @@ Item {
     Antigravity {
         id: antigravityProvider
         enabled: true
+        settings: root.settings
     }
 
     property var provider: antigravityProvider
@@ -19,11 +20,18 @@ Item {
 
     Timer {
         id: autoRefreshTimer
-        interval: root.refreshIntervalSec * 1000
+        interval: (antigravityProvider && antigravityProvider.hasActiveSession) ? 3000 : (root.refreshIntervalSec * 1000)
         running: true
         repeat: true
         triggeredOnStart: true
         onTriggered: root.refreshAll()
+    }
+
+    Connections {
+        target: antigravityProvider
+        function onHasActiveSessionChanged() {
+            autoRefreshTimer.restart()
+        }
     }
 
     function setting(name, fallback) {

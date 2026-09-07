@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Effects
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -259,7 +260,7 @@ BarWidget {
     return bgLum > 0.5 || fgLum < 0.5
   }
 
-  readonly property url iconSource: Qt.resolvedUrl(isLightTheme ? "assets/antigravity-light.svg" : "assets/antigravity.svg")
+  readonly property url iconSource: Qt.resolvedUrl("assets/antigravity.svg")
 
   function getIconSource() {
     return root.iconSource
@@ -364,13 +365,23 @@ BarWidget {
         height: 13
 
         Image {
+          id: barIconImage
           source: root.iconSource
           width: 12
           height: 12
-          sourceSize.width: 12
-          sourceSize.height: 12
+          sourceSize.width: Math.round(12 * (Screen.devicePixelRatio || 1))
+          sourceSize.height: Math.round(12 * (Screen.devicePixelRatio || 1))
           fillMode: Image.PreserveAspectFit
           anchors.centerIn: parent
+          visible: false
+          layer.enabled: true
+        }
+
+        MultiEffect {
+          anchors.fill: barIconImage
+          source: barIconImage
+          colorization: 1.0
+          colorizationColor: root.foreground
         }
 
         // Active pulse glow
@@ -565,14 +576,28 @@ BarWidget {
     Layout.fillWidth: true
     spacing: 8
 
-    Image {
-      source: root.iconSource
+    Item {
       Layout.preferredWidth: 18
       Layout.preferredHeight: 18
-      sourceSize.width: 18
-      sourceSize.height: 18
-      fillMode: Image.PreserveAspectFit
       Layout.alignment: Qt.AlignVCenter
+
+      Image {
+        id: headerIconImage
+        source: root.iconSource
+        anchors.fill: parent
+        sourceSize.width: Math.round(18 * (Screen.devicePixelRatio || 1))
+        sourceSize.height: Math.round(18 * (Screen.devicePixelRatio || 1))
+        fillMode: Image.PreserveAspectFit
+        visible: false
+        layer.enabled: true
+      }
+
+      MultiEffect {
+        anchors.fill: headerIconImage
+        source: headerIconImage
+        colorization: 1.0
+        colorizationColor: root.foreground
+      }
     }
 
     ColumnLayout {

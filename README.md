@@ -7,6 +7,7 @@ Antigravity active session monitor, prompt metrics, tool telemetry, interactive 
 ## Features
 
 ### 1. Status Bar Icon & Live Badge
+- **Themed Vector Icon**: Clean 4-pointed sparkle icon dynamically colorized to match your active Omarchy theme foreground color via `MultiEffect`.
 - **State Pulse Indicator**: Color-coded pulse dot indicating real-time agent activity:
   - 🟢 **Green (Pulsing)**: Agent is actively executing/thinking (`Working`).
   - 🔵 **Blue**: Session is open but waiting for user input (`Waiting`).
@@ -39,7 +40,7 @@ Antigravity active session monitor, prompt metrics, tool telemetry, interactive 
 
 ### 5. Performance & Telemetry
 - **Adaptive Polling**: Automatically scales refresh frequency from 60s idle down to 3s when an active session is working, then returns to 60s when idle.
-- **Today & Totals Summary**: Quick stats for prompts today, steps today, total prompts, and total steps.
+- **Today & Totals Summary**: Quick stats for prompts today, steps today, and cumulative total prompts.
 - **7-Day Activity Chart**: Daily prompt activity visualization across the past week.
 - **Tool Telemetry Breakdown**: Live call counters for tools (`run_command`, `write_to_file`, `replace_file_content`, `view_file`, `grep_search`, `find_by_name`, `subagents`, etc.).
 - **Smart Caching & Lock Pruning**: High-speed responses with local quota caching and automatic pruning of unheld presence locks older than 48 hours.
@@ -107,7 +108,7 @@ rm -f ~/.local/bin/omarchy-agent-usage-antigravity
 ### Mouse Controls
 - **Left Click**: Open/close popup panel.
 - **Middle Click**: Force immediate telemetry and quota refresh.
-- **Right Click**: Toggle in-popup settings view.
+- **Right Click**: Toggle in-popup settings view (or click the `` header button).
 
 ### Keyboard Shortcuts (when popup is open)
 | Shortcut | Action |
@@ -118,6 +119,18 @@ rm -f ~/.local/bin/omarchy-agent-usage-antigravity
 | `s` | Toggle between Stats and Settings view (or save settings) |
 | `j` / `k` | Scroll popup content down / up |
 | `q` or `Esc` | Close popup panel |
+
+### IPC Commands & Custom Keybindings
+
+The widget registers an IPC target (`jesseburlamaque.antigravity-usage`), allowing compositor keybindings (e.g. Hyprland / Sway):
+
+| Action | Command |
+|---|---|
+| Toggle popup | `omarchy-shell shell toggle jesseburlamaque.antigravity-usage` |
+| Open popup | `omarchy-shell shell summon jesseburlamaque.antigravity-usage` |
+| Close popup | `omarchy-shell shell hide jesseburlamaque.antigravity-usage` |
+| Refresh telemetry | `omarchy-shell ipc call jesseburlamaque.antigravity-usage refresh` |
+| Open settings | `omarchy-shell ipc call jesseburlamaque.antigravity-usage settings` |
 
 ---
 

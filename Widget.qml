@@ -224,16 +224,43 @@ BarWidget {
     return !!(bar && bar.shell && typeof bar.shell.updateEntryInline === "function")
   }
 
-  function saveSettings() {
-    var next = normalizedSettings(draftSettings)
-    draftSettings = next
-    root.settings = next
+  function applySettings(next) {
+    var n = normalizedSettings(next)
+    root.settings = n
+    root.draftSettings = n
+  }
+
+  function broadcastSettings(next) {
+    var items = bar && typeof bar.moduleWidgets === "function"
+      ? bar.moduleWidgets(moduleName) : [root]
+    for (var i = 0; i < items.length; i++) {
+      if (items[i] && items[i] !== root && typeof items[i].applySettings === "function") {
+        items[i].applySettings(next)
+      }
+    }
+  }
+
+  function persistSettings(values) {
+    var current = normalizedSettings(root.settings)
+    var merged = cloneObject(current, {}) || {}
+    if (values) {
+      for (var k in values) {
+        merged[k] = values[k]
+      }
+    }
+    var next = normalizedSettings(merged)
+    applySettings(next)
+    broadcastSettings(next)
     if (canPersistSettings()) {
       bar.shell.updateEntryInline(root.moduleName, next)
       settingsStatusText = "Saved to shell.json"
     } else {
       settingsStatusText = "Saved for this session"
     }
+  }
+
+  function saveSettings() {
+    persistSettings(draftSettings)
     usageMain.refreshAll(true)
   }
 
@@ -242,10 +269,32 @@ BarWidget {
     return value === undefined || value === null ? fallback : value
   }
 
-  function setDraftValue(name, value) {
+  function setDraftOnly(name, value) {
     var next = normalizedSettings(draftSettings)
     next[name] = value
     draftSettings = next
+  }
+
+  function setDraftValue(name, value) {
+    updateSetting(name, value)
+  }
+
+  function updateSetting(name, value) {
+    var next = normalizedSettings(draftSettings)
+    next[name] = value
+    if (name === "badgeMode") {
+      var bm = String(value).toLowerCase().trim()
+      if (bm !== "active" && bm !== "prompts" && bm !== "off") bm = "active"
+      next.badgeMode = bm
+      next.showBadge = bm !== "off"
+    } else if (name === "showBadge") {
+      var sb = Boolean(value)
+      next.showBadge = sb
+      next.badgeMode = sb ? (next.badgeMode === "off" ? "active" : next.badgeMode) : "off"
+    }
+    next = normalizedSettings(next)
+    draftSettings = next
+    persistSettings(next)
   }
 
   readonly property bool isLightTheme: {
@@ -283,6 +332,8 @@ BarWidget {
     return "Antigravity" + status + "\n" + (provider.todayPrompts || 0) + " prompts today • " + (provider.currentModel || "Gemini")
   }
 
+  width: button.implicitWidth
+  height: button.implicitHeight
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
@@ -332,6 +383,7 @@ BarWidget {
     function refresh(): string { root.triggerRefresh(); return "ok" }
     function settings(): string { root.openSettings(); return "ok" }
     function openSettings(): string { root.openSettings(); return "ok" }
+    function setBadgeMode(mode: string): string { root.updateSetting("badgeMode", mode); return "ok" }
   }
 
   component UsageChip: Item {
@@ -353,7 +405,12 @@ BarWidget {
     }
     readonly property int promptCount: provider ? (provider.todayPrompts || 0) : 0
     readonly property int badgeCount: badgeMode === "prompts" ? promptCount : (badgeMode === "active" ? activeCount : 0)
-    readonly property bool hasBadge: badgeMode !== "off" && badgeCount > 0
+    readonly property bool hasBadge: {
+      if (badgeMode === "off") return false
+      if (badgeMode === "prompts") return true
+      if (badgeMode === "active") return activeCount > 0
+      return false
+    }
 
     width: hasBadge ? (13 + badgeText.implicitWidth + 10) : root.barSize
     height: root.barSize
@@ -1679,26 +1736,34 @@ BarWidget {
 
     SectionCard {
       title: "Bar Badge Mode"
-      subtitle: "Choose what metric is displayed on the Omarchy bar badge"
+      subtitle: "Active Sessions: badge appears when active • Prompts: daily total • Off: icon only"
 
       ColumnLayout {
         width: parent.width
         spacing: 8
 
         ButtonGroup {
+          id: badgeModeButtonGroup
           foreground: root.foreground
           accent: root.accent
           fontFamily: root.fontFamily
           fontSize: 10
           options: [
-            { value: "active", label: "Active Sessions" },
-            { value: "prompts", label: "Today's Prompts" },
-            { value: "off", label: "Off" }
+            { value: "active", label: "Active Sessions", tooltip: "Show badge count when Antigravity sessions are active" },
+            { value: "prompts", label: "Today's Prompts", tooltip: "Show total prompt count for today" },
+            { value: "off", label: "Off", tooltip: "Hide badge entirely" }
           ]
           value: root.draftValue("badgeMode", root.draftValue("showBadge", true) === false ? "off" : "active")
           onChanged: function(v) {
-            root.setDraftValue("badgeMode", v)
-            root.setDraftValue("showBadge", v !== "off")
+            badgeModeButtonGroup.value = v
+            root.updateSetting("badgeMode", v)
+          }
+
+          Connections {
+            target: root
+            function onDraftSettingsChanged() {
+              badgeModeButtonGroup.value = String(root.draftValue("badgeMode", root.draftValue("showBadge", true) === false ? "off" : "active"))
+            }
           }
         }
       }
@@ -1767,7 +1832,9 @@ BarWidget {
           accent: root.accent
           font.family: root.fontFamily
           font.pixelSize: 11
-          onTextEdited: root.setDraftValue("terminalCommand", text)
+          onTextEdited: root.setDraftOnly("terminalCommand", text)
+          onEditingFinished: root.setDraftValue("terminalCommand", text)
+          onAccepted: root.setDraftValue("terminalCommand", text)
 
           Connections {
             target: root

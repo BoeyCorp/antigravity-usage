@@ -49,13 +49,26 @@ def recent_date_strings() -> list[str]:
     return [date_string(today - dt.timedelta(days=offset)) for offset in range(6, -1, -1)]
 
 
+_MS_EPOCH_THRESHOLD = 10_000_000_000  # Timestamps above this are assumed milliseconds
+
+
+def normalize_timestamp_seconds(value: Any) -> float:
+    """Normalize a timestamp value (epoch seconds or ms) to epoch seconds."""
+    if value is None:
+        return 0.0
+    try:
+        v = float(value)
+        return v / 1000.0 if v > _MS_EPOCH_THRESHOLD else v
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def local_date_from_timestamp(value: Any) -> str:
     if value is None:
         return date_string(dt.datetime.now().date())
     if isinstance(value, (int, float)):
         try:
-            # Check if timestamp is in milliseconds (epoch ms)
-            seconds = float(value) / 1000.0 if float(value) > 10_000_000_000 else float(value)
+            seconds = normalize_timestamp_seconds(value)
             return date_string(dt.datetime.fromtimestamp(seconds).date())
         except Exception:
             return date_string(dt.datetime.now().date())
@@ -192,14 +205,36 @@ def get_flocked_inodes() -> set[int] | None:
         return None
 
 
-def parse_presence(presence_dir: Path, prune_stale: bool = True) -> set[str]:
+_STALE_LOCK_THRESHOLD_SECS = 48 * 3600  # 48 hours
+
+
+def prune_stale_locks(presence_dir: Path) -> None:
+    """Remove lock files older than 48h that are not held by any process (housekeeping)."""
+    if not presence_dir.exists():
+        return
+    now = time.time()
+    for p in presence_dir.glob("*.lock"):
+        try:
+            if now - p.stat().st_mtime < _STALE_LOCK_THRESHOLD_SECS:
+                continue
+            with open(p, "rb") as f:
+                try:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    p.unlink(missing_ok=True)
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                except (BlockingIOError, OSError):
+                    pass  # Still held — skip
+        except (FileNotFoundError, OSError):
+            pass
+
+
+def parse_presence(presence_dir: Path) -> set[str]:
     """Return set of conversation IDs whose presence locks are actively held by running processes."""
     active_ids = set()
     if not presence_dir.exists():
         return active_ids
 
     flocked_inodes = get_flocked_inodes()
-    now = time.time()
     for p in presence_dir.glob("*.lock"):
         cid = sanitize_plain_text(p.stem, 100)
         if not cid:
@@ -215,14 +250,6 @@ def parse_presence(presence_dir: Path, prune_stale: bool = True) -> set[str]:
                     fcntl.flock(f.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
                     # Succeeded in acquiring shared lock: no active process holds it (stale file)
                     fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-                    # Prune stale locks older than 48 hours to keep directory clean
-                    if prune_stale and (now - p.stat().st_mtime > 48 * 3600):
-                        try:
-                            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                            p.unlink(missing_ok=True)
-                            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-                        except Exception:
-                            pass
                 except (BlockingIOError, PermissionError, OSError):
                     # An exclusive lock is held! Verify against /proc/locks if available
                     # to guard against any transient contention.
@@ -302,13 +329,12 @@ def check_session_working(cid: str, base_dir: Path) -> bool:
     db_path = base_dir / "conversations" / f"{cid}.db"
     if db_path.exists():
         try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=0.3)
-            cur = conn.cursor()
-            cur.execute("SELECT status FROM steps ORDER BY idx DESC LIMIT 1")
-            row = cur.fetchone()
-            conn.close()
-            if row and row[0] == 2:  # Status 2 = in progress / running
-                return True
+            with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=0.3) as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT status FROM steps ORDER BY idx DESC LIMIT 1")
+                row = cur.fetchone()
+                if row and row[0] == 2:  # Status 2 = in progress / running
+                    return True
         except Exception:
             pass
 
@@ -566,6 +592,9 @@ def format_hours_duration(hours: float) -> str:
         return f"{hours:.1f}h"
     days = int(hours // 24)
     rem_h = int(round(hours % 24))
+    if rem_h >= 24:
+        days += 1
+        rem_h = 0
     return f"{days}d {rem_h}h" if rem_h > 0 else f"{days}d"
 
 
@@ -973,7 +1002,8 @@ def scan(base_dir: Path, force: bool = False) -> dict[str, Any]:
     # 0. Read user configured default model from settings.json
     configured_model = read_configured_model(base_dir)
 
-    # 1. Parse Presence Locks
+    # 1. Parse Presence Locks (prune stale ones first as housekeeping)
+    prune_stale_locks(presence_dir)
     active_lock_ids = parse_presence(presence_dir)
 
     # 2. Parse History JSONL
@@ -991,44 +1021,33 @@ def scan(base_dir: Path, force: bool = False) -> dict[str, Any]:
     # 5. Build Unified Session Registry
     conv_map: dict[str, dict[str, Any]] = {}
 
-    # (a) Read history.jsonl for conversation history, workspaces, and user prompts
-    if history_path.exists():
-        try:
-            with open(history_path, "r", encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        e = json.loads(line)
-                        cid = sanitize_plain_text(e.get("conversationId") or "", 100)
-                        if not cid:
-                            continue
-                        ts = e.get("timestamp") or 0
-                        display = sanitize_plain_text(e.get("display") or "", 250)
-                        ws = sanitize_plain_text(e.get("workspace") or "", 300)
-                        if cid not in conv_map:
-                            conv_map[cid] = {
-                                "conversationId": cid,
-                                "firstPrompt": display,
-                                "lastPrompt": display,
-                                "workspace": ws,
-                                "timestamp": ts,
-                                "stepCount": 0,
-                                "agentName": "Antigravity"
-                            }
-                        else:
-                            if display:
-                                conv_map[cid]["lastPrompt"] = display
-                                if not conv_map[cid].get("firstPrompt"):
-                                    conv_map[cid]["firstPrompt"] = display
-                            conv_map[cid]["timestamp"] = max(conv_map[cid]["timestamp"], ts)
-                            if ws:
-                                conv_map[cid]["workspace"] = ws
-                    except Exception:
-                        continue
-        except Exception:
-            pass
+    # (a) Build conv_map from already-parsed history prompts (avoids re-reading history.jsonl)
+    for prompt in recent_prompts:
+        cid = prompt.get("conversationId", "")
+        if not cid:
+            continue
+        # Normalize all timestamps to epoch seconds for consistent comparisons
+        ts_sec = normalize_timestamp_seconds(prompt.get("timestamp", 0))
+        display = prompt.get("display", "")
+        ws = prompt.get("workspace", "")
+        if cid not in conv_map:
+            conv_map[cid] = {
+                "conversationId": cid,
+                "firstPrompt": display,
+                "lastPrompt": display,
+                "workspace": ws,
+                "timestamp": ts_sec,
+                "stepCount": 0,
+                "agentName": "Antigravity"
+            }
+        else:
+            if display:
+                conv_map[cid]["lastPrompt"] = display
+                if not conv_map[cid].get("firstPrompt"):
+                    conv_map[cid]["firstPrompt"] = display
+            conv_map[cid]["timestamp"] = max(conv_map[cid]["timestamp"], ts_sec)
+            if ws:
+                conv_map[cid]["workspace"] = ws
 
     # (b) Inspect conversations/*.db for step counts and file modification time
     conv_dir = base_dir / "conversations"
@@ -1041,13 +1060,12 @@ def scan(base_dir: Path, force: bool = False) -> dict[str, Any]:
                 mtime = db_file.stat().st_mtime
                 step_count = 0
                 try:
-                    conn = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True, timeout=0.2)
-                    cur = conn.cursor()
-                    cur.execute("SELECT count(*) FROM steps")
-                    row = cur.fetchone()
-                    if row:
-                        step_count = int(row[0] or 0)
-                    conn.close()
+                    with sqlite3.connect(f"file:{db_file}?mode=ro", uri=True, timeout=0.2) as conn:
+                        cur = conn.cursor()
+                        cur.execute("SELECT count(*) FROM steps")
+                        row = cur.fetchone()
+                        if row:
+                            step_count = int(row[0] or 0)
                 except Exception:
                     pass
 
@@ -1057,63 +1075,63 @@ def scan(base_dir: Path, force: bool = False) -> dict[str, Any]:
                         "firstPrompt": f"Session {cid[:8]}",
                         "lastPrompt": "Session",
                         "workspace": "",
-                        "timestamp": int(mtime * 1000),
+                        "timestamp": mtime,
                         "stepCount": step_count,
                         "agentName": "Antigravity"
                     }
                 else:
                     conv_map[cid]["stepCount"] = max(conv_map[cid].get("stepCount", 0), step_count)
-                conv_map[cid]["mtime"] = max(conv_map[cid].get("timestamp", 0) / 1000.0, mtime)
+                # All timestamps are now epoch seconds — compare directly
+                conv_map[cid]["mtime"] = max(conv_map[cid].get("timestamp", 0), mtime)
         except Exception:
             pass
 
     # (c) Check legacy conversation_summaries.db if it has entries
     if db_path.exists():
         try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True, timeout=1)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT conversation_id, title, preview, step_count, last_modified_time,
-                       workspace_uris, agent_name
-                FROM conversation_summaries
-            """)
-            for row in cursor:
-                c_id = sanitize_plain_text(row["conversation_id"], 100)
-                if not c_id:
-                    continue
-                if c_id not in conv_map:
-                    conv_map[c_id] = {
-                        "conversationId": c_id,
-                        "firstPrompt": sanitize_plain_text(row["title"] or f"Session {c_id[:8]}", 150),
-                        "lastPrompt": sanitize_plain_text(row["preview"] or "Session", 250),
-                        "workspace": sanitize_plain_text(row["workspace_uris"] or "", 300),
-                        "timestamp": 0,
-                        "stepCount": int(row["step_count"] or 0),
-                        "agentName": sanitize_plain_text(row["agent_name"] or "Antigravity", 80)
-                    }
-                else:
-                    if row["title"]:
-                        conv_map[c_id]["firstPrompt"] = sanitize_plain_text(row["title"], 150)
-                    if row["preview"]:
-                        conv_map[c_id]["lastPrompt"] = sanitize_plain_text(row["preview"], 250)
-                    if row["agent_name"]:
-                        conv_map[c_id]["agentName"] = sanitize_plain_text(row["agent_name"], 80)
-            conn.close()
+            with sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True, timeout=1) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT conversation_id, title, preview, step_count, last_modified_time,
+                           workspace_uris, agent_name
+                    FROM conversation_summaries
+                """)
+                for row in cursor:
+                    c_id = sanitize_plain_text(row["conversation_id"], 100)
+                    if not c_id:
+                        continue
+                    if c_id not in conv_map:
+                        conv_map[c_id] = {
+                            "conversationId": c_id,
+                            "firstPrompt": sanitize_plain_text(row["title"] or f"Session {c_id[:8]}", 150),
+                            "lastPrompt": sanitize_plain_text(row["preview"] or "Session", 250),
+                            "workspace": sanitize_plain_text(row["workspace_uris"] or "", 300),
+                            "timestamp": 0,
+                            "stepCount": int(row["step_count"] or 0),
+                            "agentName": sanitize_plain_text(row["agent_name"] or "Antigravity", 80)
+                        }
+                    else:
+                        if row["title"]:
+                            conv_map[c_id]["firstPrompt"] = sanitize_plain_text(row["title"], 150)
+                        if row["preview"]:
+                            conv_map[c_id]["lastPrompt"] = sanitize_plain_text(row["preview"], 250)
+                        if row["agent_name"]:
+                            conv_map[c_id]["agentName"] = sanitize_plain_text(row["agent_name"], 80)
         except Exception:
             pass
 
     # (d) Ensure active_lock_ids are included
     for cid in active_lock_ids:
         if cid not in conv_map:
-            now_ts = int(dt.datetime.now().timestamp() * 1000)
+            now_sec = dt.datetime.now().timestamp()
             conv_map[cid] = {
                 "conversationId": cid,
                 "firstPrompt": f"Session {cid[:8]}",
                 "lastPrompt": "Active Session",
                 "workspace": "",
-                "timestamp": now_ts,
-                "mtime": now_ts / 1000.0,
+                "timestamp": now_sec,
+                "mtime": now_sec,
                 "stepCount": 0,
                 "agentName": "Antigravity"
             }
@@ -1122,7 +1140,7 @@ def scan(base_dir: Path, force: bool = False) -> dict[str, Any]:
     def session_sort_key(c: dict[str, Any]) -> tuple[int, float]:
         cid = c["conversationId"]
         is_act = 1 if cid in active_lock_ids else 0
-        mtime = c.get("mtime") or (c.get("timestamp", 0) / 1000.0)
+        mtime = c.get("mtime") or c.get("timestamp", 0)
         return (is_act, mtime)
 
     sorted_convs = sorted(conv_map.values(), key=session_sort_key, reverse=True)
@@ -1142,7 +1160,7 @@ def scan(base_dir: Path, force: bool = False) -> dict[str, Any]:
 
         clean_ws = sanitize_plain_text(item.get("workspace", ""), 300)
         ws_name = Path(clean_ws).name if clean_ws else "Workspace"
-        mtime_sec = item.get("mtime") or (item.get("timestamp", 0) / 1000.0)
+        mtime_sec = item.get("mtime") or item.get("timestamp", 0)
         date_str = local_date_from_timestamp(mtime_sec)
         iso_mod = dt.datetime.fromtimestamp(mtime_sec, tz=dt.timezone.utc).isoformat() if mtime_sec else ""
 
@@ -1189,13 +1207,20 @@ def scan(base_dir: Path, force: bool = False) -> dict[str, Any]:
     # 6. Build recent days breakdown
     recent_days_data = []
     weekly_prompts = 0
+    # Pre-compute per-day step counts from session data
+    daily_steps: dict[str, int] = {}
+    for s in all_sessions:
+        d = s.get("date", "")
+        if d in recent_dates:
+            daily_steps[d] = daily_steps.get(d, 0) + s.get("stepCount", 0)
     for day in recent_dates:
         p_count = daily_prompts.get(day, 0)
         weekly_prompts += p_count
         recent_days_data.append({
             "date": day,
             "messageCount": p_count,
-            "prompts": p_count
+            "prompts": p_count,
+            "steps": daily_steps.get(day, 0)
         })
 
     # 7. Convert quota groups into legacy limits array for backward compatibility
@@ -1281,10 +1306,10 @@ scan_antigravity = scan
 def main() -> None:
     parser = argparse.ArgumentParser(description="Antigravity Usage Scanner")
     parser.add_argument("path", nargs="?", default=None, help="Path to ~/.gemini/antigravity-cli")
-    parser.add_argument("--json", action="store_true", default=True, help="Emit JSON output")
+    parser.add_argument("--json", action="store_true", help="Emit JSON output")
     parser.add_argument("--force", action="store_true", help="Bypass cache and force refresh from agy /usage")
     parser.add_argument("--kill", type=str, default=None, help="Kill the running session by conversation ID")
-    parser.add_argument("--refresh-quota-bg", action="store_true", help="Background worker to refresh quota cache")
+    parser.add_argument("--refresh-quota-bg", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     base_dir = expand_path(args.path) if args.path else default_base_dir()

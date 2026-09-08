@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from antigravity_usage_scanner import (
     parse_presence,
+    prune_stale_locks,
     check_session_working,
     scan,
     default_base_dir,
@@ -20,6 +21,7 @@ from antigravity_usage_scanner import (
     compute_bucket_forecast,
     update_quota_snapshots,
     format_hours_duration,
+    normalize_timestamp_seconds,
     parse_transcripts,
 )
 
@@ -50,6 +52,20 @@ class TestAntigravityScanner(unittest.TestCase):
         self.assertEqual(format_hours_duration(0.5), "30m")
         self.assertEqual(format_hours_duration(2.5), "2.5h")
         self.assertEqual(format_hours_duration(26.0), "1d 2h")
+        # Rollover fix: 47.7 % 24 = 23.7, round = 24 → should become 2d, not "1d 24h"
+        self.assertEqual(format_hours_duration(47.7), "2d")
+        self.assertEqual(format_hours_duration(24.0), "1d")
+        self.assertEqual(format_hours_duration(0), "0m")
+
+    def test_normalize_timestamp_seconds(self):
+        # Epoch seconds should pass through
+        self.assertAlmostEqual(normalize_timestamp_seconds(1725753600), 1725753600.0)
+        # Epoch milliseconds should be divided by 1000
+        self.assertAlmostEqual(normalize_timestamp_seconds(1725753600000), 1725753600.0)
+        # None returns 0
+        self.assertEqual(normalize_timestamp_seconds(None), 0.0)
+        # Invalid string returns 0
+        self.assertEqual(normalize_timestamp_seconds("not-a-number"), 0.0)
 
     def test_compute_bucket_forecast(self):
         now_dt = dt.datetime.now(dt.timezone.utc)
@@ -131,7 +147,7 @@ class TestAntigravityScanner(unittest.TestCase):
             f = open(lock_held, "rb")
             fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
-            active = parse_presence(pdir, prune_stale=False)
+            active = parse_presence(pdir)
             self.assertIn("held_session", active)
             self.assertNotIn("stale_session", active)
 
@@ -139,7 +155,7 @@ class TestAntigravityScanner(unittest.TestCase):
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
             f.close()
 
-            active_after = parse_presence(pdir, prune_stale=False)
+            active_after = parse_presence(pdir)
             self.assertNotIn("held_session", active_after)
 
     def test_concurrent_presence_detection(self):
@@ -159,7 +175,7 @@ class TestAntigravityScanner(unittest.TestCase):
 
             try:
                 def run_check():
-                    return parse_presence(pdir, prune_stale=False)
+                    return parse_presence(pdir)
 
                 # Simulate 8 concurrent monitor/widget threads checking presence simultaneously
                 with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
@@ -209,6 +225,11 @@ class TestAntigravityScanner(unittest.TestCase):
             self.assertIn("burnRatePerHour", data["limits"][0])
             self.assertIn("forecastText", data["limits"][0])
             self.assertIn("forecastStatus", data["limits"][0])
+            # Verify recentDays entries include 'steps' field
+            self.assertIn("recentDays", data)
+            self.assertTrue(len(data["recentDays"]) > 0)
+            for day_entry in data["recentDays"]:
+                self.assertIn("steps", day_entry)
 
 
 if __name__ == "__main__":

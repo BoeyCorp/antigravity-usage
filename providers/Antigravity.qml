@@ -69,8 +69,12 @@ Item {
             }
         }
 
-        onExited: {
+        onExited: function(exitCode, exitStatus) {
             root.refreshing = false
+            if (exitCode !== 0 && !root.ready) {
+                root.usageStatusText = "Scanner error (exit " + exitCode + ")"
+                root.authHelpText = "The usage scanner exited with an error. Check that python3 is installed."
+            }
         }
     }
 

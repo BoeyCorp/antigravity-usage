@@ -140,11 +140,7 @@ BarWidget {
       try {
         Quickshell.execDetached(["python3", scannerPath, "--kill", conversationId])
         root.triggerRefresh(false)
-        var t = Qt.createQmlObject('import QtQuick 2.15; Timer { interval: 350; repeat: false; running: true }', root)
-        t.triggered.connect(function() {
-          root.triggerRefresh(false)
-          t.destroy()
-        })
+        killRefreshTimer.restart()
       } catch (e) {
         console.warn("antigravity-usage/kill", e)
       }
@@ -260,7 +256,7 @@ BarWidget {
     return bgLum > 0.5 || fgLum < 0.5
   }
 
-  readonly property url iconSource: Qt.resolvedUrl("assets/antigravity.svg")
+  readonly property url iconSource: Qt.resolvedUrl(isLightTheme ? "assets/antigravity-light.svg" : "assets/antigravity.svg")
 
   function getIconSource() {
     return root.iconSource
@@ -315,6 +311,13 @@ BarWidget {
     interval: 800
     repeat: false
     onTriggered: root.refreshFlash = false
+  }
+
+  Timer {
+    id: killRefreshTimer
+    interval: 350
+    repeat: false
+    onTriggered: root.triggerRefresh(false)
   }
 
   IpcHandler {

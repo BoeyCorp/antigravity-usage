@@ -33,17 +33,22 @@ Antigravity active session monitor, prompt metrics, tool telemetry, interactive 
 - **Dynamic Sorting & Animated Visuals**: Models automatically re-sort by activity in the selected timeframe, and progress bars smoothly animate (`Easing.OutCubic`) to reflect proportional usage share.
 - **Consistent Metrics**: Clean, uniform `X prompts · Y steps` formatting across all models and timeframes.
 
-### 4. Quota Limits & Desktop Alerts
+### 4. Quota Limits, Burn Rate & Desktop Alerts
 - **Real-Time Quota Buckets**: Live quota information fetched from `agy /usage` (Gemini Weekly & 5-Hour limits, Claude/GPT Weekly & 5-Hour limits).
+- **Burn Rate Velocity & Reset Forecasting**: Real-time hourly consumption tracking (`🔥 X%/h`) and intelligent reset pacing projections (`On pace · ~65% at reset` or early warnings `Depletes in ~2.0h before reset`).
 - **Dual Reset Time Display**: Shows both relative countdown timers (e.g. `2h 15m`) and exact local wall-clock times (e.g. `04:15 AM`).
 - **Configurable Low Quota Alerts**: Toggle desktop notifications on/off and configure custom remaining percentage thresholds (5% to 50%, default 15%) via `omarchy-notification-send` (with 2-hour per-bucket rate-limiting cooldown).
 
 ### 5. Performance & Telemetry
+- **Sub-50ms High Performance**: Incremental transcript caching indexed by file modification time and size keeps full telemetry and session scans under ~50ms even with dozens of past sessions.
+- **Decoupled Quota Fetching**: Telemetry and popup opens remain instantaneous while quota limits update asynchronously in the background.
+- **Dynamic Configured Model**: Automatically detects default model selection from `~/.gemini/antigravity-cli/settings.json`.
+- **Fast Inode PID Resolution**: O(1) advisory lock lookup via `/proc/locks` for instant session termination (`killSession`).
 - **Adaptive Polling**: Automatically scales refresh frequency from 60s idle down to 3s when an active session is working, then returns to 60s when idle.
 - **Today & Totals Summary**: Quick stats for prompts today, steps today, and cumulative total prompts.
 - **7-Day Activity Chart**: Daily prompt activity visualization across the past week.
 - **Tool Telemetry Breakdown**: Live call counters for tools (`run_command`, `write_to_file`, `replace_file_content`, `view_file`, `grep_search`, `find_by_name`, `subagents`, etc.).
-- **Smart Caching & Lock Pruning**: High-speed responses with local quota caching and automatic pruning of unheld presence locks older than 48 hours.
+- **Smart Presence & Lock Pruning**: High-speed responses with automatic pruning of unheld presence locks older than 48 hours.
 
 ### 6. Dual Omarchy Integration
 - **Standalone Bar Widget**: Full-featured QML popup panel (`jesseburlamaque.antigravity-usage`).

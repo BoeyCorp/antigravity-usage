@@ -17,7 +17,7 @@ Item {
     property bool hasActiveSession: false
     property string usageStatusText: ""
     property string authHelpText: ""
-    property string currentModel: "Gemini 3.7 Flash"
+    property string currentModel: ""
     property string tierLabel: "Google DeepMind"
 
     property int todayPrompts: 0
@@ -86,7 +86,7 @@ Item {
             root.hasActiveSession = data.hasActiveSession === true
             root.hasLocalStats = data.hasLocalStats !== false
             root.tierLabel = data.tierLabel || "Google DeepMind"
-            root.currentModel = data.currentModel || "Gemini 3.7 Flash"
+            root.currentModel = data.currentModel || ""
 
             root.todayPrompts = Math.max(0, Number(data.todayPrompts || 0))
             root.todaySessions = Math.max(0, Number(data.todaySessions || 0))

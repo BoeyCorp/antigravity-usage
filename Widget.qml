@@ -47,7 +47,7 @@ BarWidget {
       return
     }
     if (button === Qt.MiddleButton) {
-      triggerRefresh()
+      triggerRefresh(true)
       return
     }
 
@@ -55,14 +55,14 @@ BarWidget {
       popupOpen = false
     } else {
       popupOpen = true
-      triggerRefresh()
+      triggerRefresh(false)
     }
   }
 
-  function triggerRefresh() {
+  function triggerRefresh(force) {
     refreshFlash = true
     refreshFlashTimer.restart()
-    usageMain.refreshAll(true)
+    usageMain.refreshAll(force === true)
   }
 
   function getTerminalArgs(cmdArgs, workspacePath) {
@@ -139,10 +139,10 @@ BarWidget {
     if (scannerPath) {
       try {
         Quickshell.execDetached(["python3", scannerPath, "--kill", conversationId])
-        root.triggerRefresh()
+        root.triggerRefresh(false)
         var t = Qt.createQmlObject('import QtQuick 2.15; Timer { interval: 350; repeat: false; running: true }', root)
         t.triggered.connect(function() {
-          root.triggerRefresh()
+          root.triggerRefresh(false)
           t.destroy()
         })
       } catch (e) {
@@ -484,7 +484,7 @@ BarWidget {
       }
       onCloseRequested: root.close()
       onTextKey: function(t) {
-        if (t === "r" || t === "R") root.triggerRefresh()
+        if (t === "r" || t === "R") root.triggerRefresh(true)
         else if (t === "s" || t === "S") root.settingsMode ? root.saveSettings() : root.openSettings()
         else if (t === "n" || t === "N") { if (!root.settingsMode) root.newSession() }
         else if (t === "q" || t === "Q") root.close()
@@ -641,7 +641,7 @@ BarWidget {
 
       Text {
         textFormat: Text.PlainText
-        text: provider ? (provider.currentModel || "Gemini 3.7 Flash") : ""
+        text: provider ? (provider.currentModel || "Antigravity") : ""
         color: dim
         font.family: fontFamily
         font.pixelSize: 10
@@ -680,7 +680,7 @@ BarWidget {
         verticalPadding: 4
         active: root.refreshFlash || usageMain.refreshing
         onClicked: {
-          root.triggerRefresh()
+          root.triggerRefresh(true)
           keyCatcher.forceActiveFocus()
         }
       }
@@ -879,12 +879,35 @@ BarWidget {
                   anchors.bottom: parent.bottom
                   width: parent.width * parent.frac
                   color: {
-                    if (parent.frac <= 0.15) return bar ? bar.urgent : Color.urgent
-                    if (parent.frac <= 0.30) return "#F59E0B"
+                    if (parent.frac <= 0.15 || modelData.forecastStatus === "critical") return bar ? bar.urgent : Color.urgent
+                    if (parent.frac <= 0.30 || modelData.forecastStatus === "warning") return "#F59E0B"
                     return modelData.color || ((modelData.name || "").indexOf("Claude") !== -1 ? "#D97757" : root.accent)
                   }
                   radius: 2
                   Behavior on width { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+                }
+              }
+
+              RowLayout {
+                visible: !!(modelData.forecastText && modelData.forecastText !== "")
+                Layout.fillWidth: true
+                spacing: 4
+
+                Text {
+                  textFormat: Text.PlainText
+                  readonly property string burnStr: modelData.burnRateText ? ("🔥 " + modelData.burnRateText + " · ") : ""
+                  text: burnStr + (modelData.forecastText || "")
+                  color: {
+                    if (modelData.forecastStatus === "critical") return bar ? bar.urgent : Color.urgent
+                    if (modelData.forecastStatus === "warning") return "#F59E0B"
+                    if (modelData.forecastStatus === "safe") return "#10B981"
+                    return root.dim
+                  }
+                  font.family: root.fontFamily
+                  font.pixelSize: 8
+                  font.bold: modelData.forecastStatus === "critical" || modelData.forecastStatus === "warning"
+                  elide: Text.ElideRight
+                  Layout.fillWidth: true
                 }
               }
             }

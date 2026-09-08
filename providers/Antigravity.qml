@@ -53,6 +53,15 @@ Item {
         return value
     }
 
+    property double refreshStartTime: 0
+
+    Timer {
+        id: minRefreshDurationTimer
+        interval: 800
+        repeat: false
+        onTriggered: root.refreshing = false
+    }
+
     Process {
         id: scanner
         running: false
@@ -72,7 +81,14 @@ Item {
         }
 
         onExited: function(exitCode, exitStatus) {
-            root.refreshing = false
+            var elapsed = Date.now() - root.refreshStartTime
+            if (elapsed < 800) {
+                minRefreshDurationTimer.interval = Math.max(50, 800 - elapsed)
+                minRefreshDurationTimer.restart()
+            } else {
+                root.refreshing = false
+            }
+
             if (exitCode !== 0 && !root.ready) {
                 root.usageStatusText = "Scanner error (exit " + exitCode + ")"
                 root.authHelpText = "The usage scanner exited with an error. Check that python3 is installed."
@@ -129,6 +145,8 @@ Item {
         if (scanner.running)
             return
 
+        minRefreshDurationTimer.stop()
+        root.refreshStartTime = Date.now()
         root.refreshing = true
         var cmd = ["python3", root.scannerScriptPath]
         if (force === true) {

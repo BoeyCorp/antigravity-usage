@@ -544,7 +544,7 @@ BarWidget {
               running: root.popupOpen && usageMain.refreshing
               from: -loadingGlow.width
               to: panelMainColumn.width
-              duration: 950
+              duration: 800
               easing.type: Easing.InOutQuad
             }
           }

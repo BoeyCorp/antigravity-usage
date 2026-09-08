@@ -139,6 +139,9 @@ def empty_result(base_dir: Path | None = None) -> dict[str, Any]:
         "limits": [],
         "recentWorkspaces": [],
         "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "quotaUpdatedAt": "",
+        "quotaUpdatedMs": 0,
+        "lastFullRefreshMs": 0,
         "usageStatusText": "No Antigravity data found",
         "authHelpText": "Run `agy` to start a session."
     }
@@ -1398,6 +1401,17 @@ def scan(base_dir: Path, force: bool = False, alert_threshold: int | None = None
 
     clean_latest_model = sanitize_plain_text(latest_model, 80)
 
+    quota_cache_path = base_dir / "cache" / "quota_usage_cache.json"
+    quota_updated_at = ""
+    quota_updated_ms = 0
+    if quota_cache_path.exists():
+        try:
+            quota_mtime = quota_cache_path.stat().st_mtime
+            quota_updated_at = dt.datetime.fromtimestamp(quota_mtime, tz=dt.timezone.utc).isoformat()
+            quota_updated_ms = int(quota_mtime * 1000)
+        except Exception:
+            pass
+
     result = {
         "schemaVersion": 1,
         "id": "antigravity",
@@ -1427,6 +1441,9 @@ def scan(base_dir: Path, force: bool = False, alert_threshold: int | None = None
         "limits": limits,
         "recentWorkspaces": recent_workspaces,
         "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "quotaUpdatedAt": quota_updated_at,
+        "quotaUpdatedMs": quota_updated_ms,
+        "lastFullRefreshMs": quota_updated_ms,
         "usageStatusText": f"{active_status} • {clean_latest_model}",
         "authHelpText": ""
     }

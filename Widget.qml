@@ -688,16 +688,17 @@ BarWidget {
 
         Text {
           textFormat: Text.PlainText
-          visible: !usageMain.refreshing && provider && provider.lastUpdatedMs > 0
-          readonly property int ageSec: provider && provider.lastUpdatedMs > 0 ? Math.floor((root.nowMs - provider.lastUpdatedMs) / 1000) : -1
+          readonly property double refMs: (provider && provider.lastFullRefreshMs > 0) ? provider.lastFullRefreshMs : (provider ? provider.lastUpdatedMs : 0)
+          visible: !usageMain.refreshing && refMs > 0
+          readonly property int ageSec: refMs > 0 ? Math.floor((root.nowMs - refMs) / 1000) : -1
           text: {
             if (ageSec < 0) return ""
-            if (ageSec < 10) return "just now"
+            if (ageSec < 15) return "just now"
             if (ageSec < 60) return ageSec + "s ago"
             if (ageSec < 3600) return Math.floor(ageSec / 60) + "m ago"
             return Math.floor(ageSec / 3600) + "h ago"
           }
-          color: ageSec > 120 ? root.urgent : dim
+          color: ageSec > 300 ? root.urgent : dim
           font.family: fontFamily
           font.pixelSize: 9
           opacity: 0.7

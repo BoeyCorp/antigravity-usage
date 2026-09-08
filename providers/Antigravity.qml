@@ -21,6 +21,8 @@ Item {
     property string tierLabel: "Google DeepMind"
     property string updatedAt: ""
     property double lastUpdatedMs: 0
+    property string quotaUpdatedAt: ""
+    property double lastFullRefreshMs: 0
 
     property int todayPrompts: 0
     property int todaySessions: 0
@@ -134,6 +136,8 @@ Item {
             root.authHelpText = data.authHelpText || ""
             root.updatedAt = data.updatedAt || ""
             root.lastUpdatedMs = Date.now()
+            root.quotaUpdatedAt = data.quotaUpdatedAt || ""
+            root.lastFullRefreshMs = Number(data.lastFullRefreshMs || data.quotaUpdatedMs || 0)
         } catch (e) {
             root.usageStatusText = "Scanner error"
             root.authHelpText = String(e)

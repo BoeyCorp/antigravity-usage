@@ -231,6 +231,9 @@ class TestAntigravityScanner(unittest.TestCase):
             self.assertTrue(len(data["recentDays"]) > 0)
             for day_entry in data["recentDays"]:
                 self.assertIn("steps", day_entry)
+            self.assertIn("quotaUpdatedAt", data)
+            self.assertIn("lastFullRefreshMs", data)
+            self.assertTrue(data["lastFullRefreshMs"] > 0)
 
     def test_quota_notifications_cooldown_and_consolidation(self):
         from unittest.mock import patch

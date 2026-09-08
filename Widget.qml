@@ -523,6 +523,33 @@ BarWidget {
           foreground: root.foreground
         }
 
+        Item {
+          id: loadingBarContainer
+          Layout.fillWidth: true
+          Layout.preferredHeight: usageMain.refreshing ? 2 : 0
+          Layout.topMargin: -6
+          Layout.bottomMargin: -2
+          visible: usageMain.refreshing
+          clip: true
+
+          Rectangle {
+            id: loadingGlow
+            height: parent.height
+            width: Math.max(60, panelMainColumn.width * 0.35)
+            radius: 1
+            color: root.accent
+
+            NumberAnimation on x {
+              loops: Animation.Infinite
+              running: root.popupOpen && usageMain.refreshing
+              from: -loadingGlow.width
+              to: panelMainColumn.width
+              duration: 950
+              easing.type: Easing.InOutQuad
+            }
+          }
+        }
+
         Flickable {
           id: flick
           Layout.fillWidth: true
@@ -541,9 +568,13 @@ BarWidget {
             width: flick.width
             spacing: 8
 
+            SkeletonContent {
+              visible: !root.settingsMode && usageMain.refreshing && (!root.provider || !root.provider.ready || !root.provider.hasLocalStats)
+            }
+
             Text {
               textFormat: Text.PlainText
-              visible: !root.settingsMode && (!root.provider || !root.provider.hasLocalStats)
+              visible: !root.settingsMode && (!root.provider || !root.provider.hasLocalStats) && !usageMain.refreshing
               Layout.fillWidth: true
               Layout.topMargin: 24
               text: "No Antigravity sessions found. Run `agy` to start."
@@ -561,7 +592,9 @@ BarWidget {
             ToolsCard { provider: root.settingsMode ? null : root.provider }
             RecentSessionsCard { provider: root.settingsMode ? null : root.provider }
 
-            UsageFooter { visible: !root.settingsMode }
+            UsageFooter {
+              visible: !root.settingsMode && (root.provider && root.provider.ready && root.provider.hasLocalStats)
+            }
             SettingsContent {
               id: settingsContent
               visible: root.settingsMode
@@ -642,14 +675,46 @@ BarWidget {
         }
       }
 
-      Text {
-        textFormat: Text.PlainText
-        text: provider ? (provider.currentModel || "Antigravity") : ""
-        color: dim
-        font.family: fontFamily
-        font.pixelSize: 10
-        elide: Text.ElideRight
+      RowLayout {
         Layout.fillWidth: true
+        spacing: 6
+
+        Text {
+          textFormat: Text.PlainText
+          text: provider ? (provider.currentModel || "Antigravity") : ""
+          color: dim
+          font.family: fontFamily
+          font.pixelSize: 10
+          elide: Text.ElideRight
+          Layout.fillWidth: true
+        }
+
+        Text {
+          textFormat: Text.PlainText
+          visible: !usageMain.refreshing && provider && provider.lastUpdatedMs > 0
+          readonly property int ageSec: provider && provider.lastUpdatedMs > 0 ? Math.floor((root.nowMs - provider.lastUpdatedMs) / 1000) : -1
+          text: {
+            if (ageSec < 0) return ""
+            if (ageSec < 10) return "just now"
+            if (ageSec < 60) return ageSec + "s ago"
+            if (ageSec < 3600) return Math.floor(ageSec / 60) + "m ago"
+            return Math.floor(ageSec / 3600) + "h ago"
+          }
+          color: ageSec > 120 ? root.urgent : dim
+          font.family: fontFamily
+          font.pixelSize: 9
+          opacity: 0.7
+        }
+
+        Text {
+          textFormat: Text.PlainText
+          visible: usageMain.refreshing
+          text: "Updating…"
+          color: root.accent
+          font.family: fontFamily
+          font.pixelSize: 9
+          opacity: 0.8
+        }
       }
     }
 
@@ -743,6 +808,118 @@ BarWidget {
       verticalPadding: 4
       active: true
       onClicked: root.saveSettings()
+    }
+  }
+
+  component SkeletonBlock: Rectangle {
+    id: skel
+    property real baseOpacity: 0.10
+    radius: 4
+    color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, baseOpacity)
+
+    SequentialAnimation on opacity {
+      loops: Animation.Infinite
+      running: root.popupOpen
+      NumberAnimation { from: 0.4; to: 0.85; duration: 800; easing.type: Easing.InOutQuad }
+      NumberAnimation { from: 0.85; to: 0.4; duration: 800; easing.type: Easing.InOutQuad }
+    }
+  }
+
+  component SkeletonContent: ColumnLayout {
+    Layout.fillWidth: true
+    spacing: 8
+
+    // TodayCard Skeleton
+    SectionCard {
+      title: "Today & Totals"
+      RowLayout {
+        width: parent.width
+        spacing: Style.space(8)
+        Repeater {
+          model: 3
+          delegate: ColumnLayout {
+            Layout.fillWidth: true
+            Layout.preferredWidth: 1
+            spacing: 4
+            SkeletonBlock {
+              Layout.fillWidth: true
+              Layout.preferredHeight: 28
+              radius: 4
+            }
+            SkeletonBlock {
+              Layout.fillWidth: true
+              Layout.preferredHeight: 10
+              radius: 3
+            }
+          }
+        }
+      }
+    }
+
+    // QuotaLimitsCard Skeleton
+    SectionCard {
+      title: "Quota Limits"
+      ColumnLayout {
+        width: parent.width
+        spacing: 8
+        Repeater {
+          model: 2
+          delegate: ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 5
+            RowLayout {
+              Layout.fillWidth: true
+              SkeletonBlock {
+                Layout.preferredWidth: 90
+                Layout.preferredHeight: 11
+              }
+              Item { Layout.fillWidth: true }
+              SkeletonBlock {
+                Layout.preferredWidth: 45
+                Layout.preferredHeight: 11
+              }
+            }
+            SkeletonBlock {
+              Layout.fillWidth: true
+              Layout.preferredHeight: 6
+              radius: 3
+            }
+          }
+        }
+      }
+    }
+
+    // RecentSessionsCard Skeleton
+    SectionCard {
+      title: "Recent Sessions"
+      ColumnLayout {
+        width: parent.width
+        spacing: 8
+        Repeater {
+          model: 3
+          delegate: RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+            SkeletonBlock {
+              Layout.preferredWidth: 14
+              Layout.preferredHeight: 14
+              radius: 7
+            }
+            ColumnLayout {
+              Layout.fillWidth: true
+              spacing: 4
+              SkeletonBlock {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 12
+              }
+              SkeletonBlock {
+                Layout.preferredWidth: 130
+                Layout.preferredHeight: 10
+              }
+            }
+          }
+        }
+      }
     }
   }
 

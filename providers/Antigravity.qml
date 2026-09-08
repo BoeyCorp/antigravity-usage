@@ -19,6 +19,8 @@ Item {
     property string authHelpText: ""
     property string currentModel: ""
     property string tierLabel: "Google DeepMind"
+    property string updatedAt: ""
+    property double lastUpdatedMs: 0
 
     property int todayPrompts: 0
     property int todaySessions: 0
@@ -114,6 +116,8 @@ Item {
 
             root.usageStatusText = data.usageStatusText || ""
             root.authHelpText = data.authHelpText || ""
+            root.updatedAt = data.updatedAt || ""
+            root.lastUpdatedMs = Date.now()
 
             root.checkLowQuotaAlerts(data.quotaGroups)
         } catch (e) {

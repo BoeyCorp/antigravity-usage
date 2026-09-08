@@ -23,6 +23,7 @@ from antigravity_usage_scanner import (
     format_hours_duration,
     normalize_timestamp_seconds,
     parse_transcripts,
+    check_and_send_quota_notifications,
 )
 
 
@@ -230,6 +231,36 @@ class TestAntigravityScanner(unittest.TestCase):
             self.assertTrue(len(data["recentDays"]) > 0)
             for day_entry in data["recentDays"]:
                 self.assertIn("steps", day_entry)
+
+    def test_quota_notifications_cooldown_and_consolidation(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pdir = Path(tmpdir)
+            quota_groups = [
+                {
+                    "name": "Claude and GPT models",
+                    "buckets": [
+                        {"id": "3p-weekly", "name": "Weekly Limit", "remainingPercent": 0},
+                        {"id": "3p-5h", "name": "5-Hour Limit", "remainingPercent": 2},
+                    ]
+                }
+            ]
+
+            with patch("subprocess.run") as mock_run:
+                # 1. First run: sends exactly 1 consolidated notification for the group
+                check_and_send_quota_notifications(pdir, quota_groups, threshold_pct=15)
+                self.assertEqual(mock_run.call_count, 1)
+                args, _ = mock_run.call_args
+                cmd = args[0]
+                self.assertEqual(cmd[0], "omarchy-notification-send")
+                self.assertIn("0%", cmd[7])
+                self.assertIn("Weekly Limit (0%)", cmd[8])
+                self.assertIn("5-Hour Limit (2%)", cmd[8])
+
+                # 2. Second run immediately after: cooldown prevents duplicate notification
+                mock_run.reset_mock()
+                check_and_send_quota_notifications(pdir, quota_groups, threshold_pct=15)
+                self.assertEqual(mock_run.call_count, 0)
 
 
 if __name__ == "__main__":

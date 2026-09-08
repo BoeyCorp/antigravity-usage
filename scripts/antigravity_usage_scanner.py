@@ -973,7 +973,89 @@ def format_quota_groups(raw_data: dict[str, Any], base_dir: Path | None = None) 
     return formatted
 
 
-def scan(base_dir: Path, force: bool = False) -> dict[str, Any]:
+def check_and_send_quota_notifications(
+    base_dir: Path,
+    quota_groups: list[dict[str, Any]],
+    threshold_pct: int = 15,
+    cooldown_hours: float = 2.0
+) -> None:
+    """Send unified desktop notification when model quota drops below threshold, with on-disk rate limiting."""
+    if not quota_groups:
+        return
+
+    cooldown_path = base_dir / "cache" / "quota_notification_cooldown.json"
+    now = time.time()
+    cooldown_secs = cooldown_hours * 3600
+
+    cooldown_data: dict[str, float] = {}
+    if cooldown_path.exists():
+        try:
+            with open(cooldown_path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+                if isinstance(d, dict):
+                    cooldown_data = d
+        except Exception:
+            cooldown_data = {}
+
+    modified = False
+
+    for group in quota_groups:
+        g_name = group.get("name") or "Model Group"
+        buckets = group.get("buckets") or []
+        low_buckets = []
+        min_pct = 100
+
+        for b in buckets:
+            rem_pct = b.get("remainingPercent")
+            if rem_pct is None:
+                rem_frac = b.get("remainingFraction", 1.0)
+                rem_pct = round(rem_frac * 100)
+            if rem_pct <= threshold_pct:
+                label = b.get("label") or b.get("name") or "Limit"
+                low_buckets.append(f"{label} ({rem_pct}%)")
+                min_pct = min(min_pct, rem_pct)
+
+        if not low_buckets:
+            continue
+
+        # Check cooldown for this model group
+        last_sent = cooldown_data.get(g_name, 0.0)
+        if now - last_sent < cooldown_secs:
+            continue
+
+        # Send consolidated notification for this group
+        headline = f"Antigravity Quota Low ({min_pct}% remaining)"
+        details = f"{g_name}: {', '.join(low_buckets)} remaining."
+        urgency = "critical" if min_pct <= 5 else "normal"
+
+        cmd = [
+            "omarchy-notification-send",
+            "--app-name", "antigravity-usage",
+            "-u", urgency,
+            "-g", "󰢌",
+            headline,
+            details
+        ]
+
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=4)
+            cooldown_data[g_name] = now
+            modified = True
+        except Exception:
+            pass
+
+    if modified:
+        try:
+            cooldown_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_cooldown = cooldown_path.with_suffix(".tmp")
+            with open(tmp_cooldown, "w", encoding="utf-8") as f:
+                json.dump(cooldown_data, f)
+            tmp_cooldown.replace(cooldown_path)
+        except Exception:
+            pass
+
+
+def scan(base_dir: Path, force: bool = False, alert_threshold: int | None = None) -> dict[str, Any]:
     if not base_dir.exists():
         return empty_result(base_dir)
 
@@ -986,6 +1068,8 @@ def scan(base_dir: Path, force: bool = False) -> dict[str, Any]:
                 with open(scan_cache_path, "r", encoding="utf-8") as f:
                     cached = json.load(f)
                     if isinstance(cached, dict) and cached.get("ready"):
+                        if alert_threshold is not None:
+                            check_and_send_quota_notifications(base_dir, cached.get("quotaGroups", []), threshold_pct=alert_threshold)
                         return cached
         except Exception:
             pass
@@ -1017,6 +1101,9 @@ def scan(base_dir: Path, force: bool = False) -> dict[str, Any]:
     # 4. Fetch real quota data from agy CLI /usage
     raw_quota = fetch_agy_usage_quota(base_dir, force=force)
     quota_groups = format_quota_groups(raw_quota, base_dir=base_dir)
+
+    if alert_threshold is not None:
+        check_and_send_quota_notifications(base_dir, quota_groups, threshold_pct=alert_threshold)
 
     # 5. Build Unified Session Registry
     conv_map: dict[str, dict[str, Any]] = {}
@@ -1310,6 +1397,7 @@ def main() -> None:
     parser.add_argument("--force", action="store_true", help="Bypass cache and force refresh from agy /usage")
     parser.add_argument("--kill", type=str, default=None, help="Kill the running session by conversation ID")
     parser.add_argument("--refresh-quota-bg", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--notify-low-quota", type=int, nargs="?", const=15, default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     base_dir = expand_path(args.path) if args.path else default_base_dir()
@@ -1323,7 +1411,7 @@ def main() -> None:
         print(json.dumps({"success": success, "conversationId": args.kill}))
         return
 
-    result = scan(base_dir, force=args.force)
+    result = scan(base_dir, force=args.force, alert_threshold=args.notify_low_quota)
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 

@@ -521,31 +521,28 @@ BarWidget {
           id: panelSeparator
           Layout.fillWidth: true
           foreground: root.foreground
-        }
 
-        Item {
-          id: loadingBarContainer
-          Layout.fillWidth: true
-          Layout.preferredHeight: usageMain.refreshing ? 2 : 0
-          Layout.topMargin: -6
-          Layout.bottomMargin: -2
-          visible: usageMain.refreshing
-          clip: true
+          Item {
+            anchors.fill: parent
+            clip: true
+            visible: usageMain.refreshing
 
-          Rectangle {
-            id: loadingGlow
-            height: parent.height
-            width: Math.max(60, panelMainColumn.width * 0.35)
-            radius: 1
-            color: root.accent
+            Rectangle {
+              id: loadingGlow
+              anchors.verticalCenter: parent.verticalCenter
+              height: 2
+              width: Math.max(60, panelSeparator.width * 0.35)
+              radius: 1
+              color: root.accent
 
-            NumberAnimation on x {
-              loops: Animation.Infinite
-              running: root.popupOpen && usageMain.refreshing
-              from: -loadingGlow.width
-              to: panelMainColumn.width
-              duration: 800
-              easing.type: Easing.InOutQuad
+              NumberAnimation on x {
+                loops: Animation.Infinite
+                running: root.popupOpen && usageMain.refreshing
+                from: -loadingGlow.width
+                to: panelSeparator.width
+                duration: 800
+                easing.type: Easing.InOutQuad
+              }
             }
           }
         }

@@ -977,80 +977,137 @@ def check_and_send_quota_notifications(
     base_dir: Path,
     quota_groups: list[dict[str, Any]],
     threshold_pct: int = 15,
-    cooldown_hours: float = 2.0
 ) -> None:
-    """Send unified desktop notification when model quota drops below threshold, with on-disk rate limiting."""
+    """Send unified desktop notification when model quota drops below threshold.
+
+    Guarantees:
+    1. Concurrency-safe: Uses non-blocking flock on a dedicated lock file so only ONE
+       monitor process can check or send at a time; concurrent monitor bars exit immediately.
+    2. No recurring spam: Tracks quota state on disk. Once notified for a low-quota event,
+       does NOT re-notify every 2 hours while quota sits at 0%. Only re-notifies if:
+       - Quota replenished above threshold and drops again, OR
+       - Quota escalates from warning (>5%) to critical (<=5%) with at least 1h separation.
+    3. Multi-bucket consolidation: Consolidates all low buckets in the same model group
+       into a single notification.
+    """
     if not quota_groups:
         return
 
-    cooldown_path = base_dir / "cache" / "quota_notification_cooldown.json"
-    now = time.time()
-    cooldown_secs = cooldown_hours * 3600
+    cache_dir = base_dir / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = cache_dir / "quota_notification.lock"
+    state_path = cache_dir / "quota_notification_state.json"
 
-    cooldown_data: dict[str, float] = {}
-    if cooldown_path.exists():
+    # Non-blocking lock: if another monitor process is currently in this critical section, exit immediately
+    lock_fd = None
+    try:
+        lock_fd = open(lock_path, "w")
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, OSError):
+        if lock_fd:
+            try:
+                lock_fd.close()
+            except Exception:
+                pass
+        return
+
+    try:
+        now = time.time()
+        state_data: dict[str, dict[str, Any]] = {}
+        if state_path.exists():
+            try:
+                with open(state_path, "r", encoding="utf-8") as f:
+                    d = json.load(f)
+                    if isinstance(d, dict):
+                        state_data = d
+            except Exception:
+                state_data = {}
+
+        modified = False
+
+        for group in quota_groups:
+            g_name = group.get("name") or "Model Group"
+            buckets = group.get("buckets") or []
+            if not buckets:
+                continue
+
+            low_buckets = []
+            min_pct = 100
+            for b in buckets:
+                rem_pct = b.get("remainingPercent")
+                if rem_pct is None:
+                    rem_frac = b.get("remainingFraction", 1.0)
+                    rem_pct = round(rem_frac * 100)
+                if rem_pct <= threshold_pct:
+                    label = b.get("label") or b.get("name") or "Limit"
+                    low_buckets.append(f"{label} ({rem_pct}%)")
+                    min_pct = min(min_pct, rem_pct)
+
+            group_state = state_data.get(g_name, {})
+            was_low = bool(group_state.get("alert_active", False))
+            last_notified_pct = group_state.get("last_notified_pct", 100)
+            last_notified_time = float(group_state.get("last_notified_time", 0.0))
+
+            if not low_buckets:
+                # Quota is healthy (above threshold)
+                if was_low:
+                    # Quota replenished! Reset state so future drops trigger an alert
+                    group_state["alert_active"] = False
+                    group_state["last_notified_pct"] = 100
+                    state_data[g_name] = group_state
+                    modified = True
+                continue
+
+            # Quota is currently low
+            should_notify = False
+            if not was_low:
+                # First time dropping below threshold
+                should_notify = True
+            elif min_pct <= 5 and last_notified_pct > 5 and (now - last_notified_time > 3600):
+                # Escalation from warning (>5%) to critical (<=5%)
+                should_notify = True
+
+            if should_notify:
+                headline = f"Antigravity Quota Low ({min_pct}% remaining)"
+                details = f"{g_name}: {', '.join(low_buckets)} remaining."
+                urgency = "critical" if min_pct <= 5 else "normal"
+
+                cmd = [
+                    "omarchy-notification-send",
+                    "--app-name", "antigravity-usage",
+                    "-u", urgency,
+                    "-g", "󰢌",
+                    headline,
+                    details
+                ]
+
+                try:
+                    subprocess.run(cmd, capture_output=True, timeout=4)
+                    group_state["alert_active"] = True
+                    group_state["last_notified_pct"] = min_pct
+                    group_state["last_notified_time"] = now
+                    state_data[g_name] = group_state
+                    modified = True
+                except Exception:
+                    pass
+            elif not was_low:
+                # In case notification delivery failed, mark active to avoid tight retry loop
+                group_state["alert_active"] = True
+                state_data[g_name] = group_state
+                modified = True
+
+        if modified:
+            try:
+                tmp_state = state_path.with_suffix(".tmp")
+                with open(tmp_state, "w", encoding="utf-8") as f:
+                    json.dump(state_data, f, indent=2)
+                tmp_state.replace(state_path)
+            except Exception:
+                pass
+    finally:
         try:
-            with open(cooldown_path, "r", encoding="utf-8") as f:
-                d = json.load(f)
-                if isinstance(d, dict):
-                    cooldown_data = d
-        except Exception:
-            cooldown_data = {}
-
-    modified = False
-
-    for group in quota_groups:
-        g_name = group.get("name") or "Model Group"
-        buckets = group.get("buckets") or []
-        low_buckets = []
-        min_pct = 100
-
-        for b in buckets:
-            rem_pct = b.get("remainingPercent")
-            if rem_pct is None:
-                rem_frac = b.get("remainingFraction", 1.0)
-                rem_pct = round(rem_frac * 100)
-            if rem_pct <= threshold_pct:
-                label = b.get("label") or b.get("name") or "Limit"
-                low_buckets.append(f"{label} ({rem_pct}%)")
-                min_pct = min(min_pct, rem_pct)
-
-        if not low_buckets:
-            continue
-
-        # Check cooldown for this model group
-        last_sent = cooldown_data.get(g_name, 0.0)
-        if now - last_sent < cooldown_secs:
-            continue
-
-        # Send consolidated notification for this group
-        headline = f"Antigravity Quota Low ({min_pct}% remaining)"
-        details = f"{g_name}: {', '.join(low_buckets)} remaining."
-        urgency = "critical" if min_pct <= 5 else "normal"
-
-        cmd = [
-            "omarchy-notification-send",
-            "--app-name", "antigravity-usage",
-            "-u", urgency,
-            "-g", "󰢌",
-            headline,
-            details
-        ]
-
-        try:
-            subprocess.run(cmd, capture_output=True, timeout=4)
-            cooldown_data[g_name] = now
-            modified = True
-        except Exception:
-            pass
-
-    if modified:
-        try:
-            cooldown_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_cooldown = cooldown_path.with_suffix(".tmp")
-            with open(tmp_cooldown, "w", encoding="utf-8") as f:
-                json.dump(cooldown_data, f)
-            tmp_cooldown.replace(cooldown_path)
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+            lock_fd.close()
         except Exception:
             pass
 

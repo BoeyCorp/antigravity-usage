@@ -234,9 +234,10 @@ class TestAntigravityScanner(unittest.TestCase):
 
     def test_quota_notifications_cooldown_and_consolidation(self):
         from unittest.mock import patch
+        import concurrent.futures
         with tempfile.TemporaryDirectory() as tmpdir:
             pdir = Path(tmpdir)
-            quota_groups = [
+            low_quota_groups = [
                 {
                     "name": "Claude and GPT models",
                     "buckets": [
@@ -245,10 +246,19 @@ class TestAntigravityScanner(unittest.TestCase):
                     ]
                 }
             ]
+            healthy_quota_groups = [
+                {
+                    "name": "Claude and GPT models",
+                    "buckets": [
+                        {"id": "3p-weekly", "name": "Weekly Limit", "remainingPercent": 100},
+                        {"id": "3p-5h", "name": "5-Hour Limit", "remainingPercent": 100},
+                    ]
+                }
+            ]
 
             with patch("subprocess.run") as mock_run:
                 # 1. First run: sends exactly 1 consolidated notification for the group
-                check_and_send_quota_notifications(pdir, quota_groups, threshold_pct=15)
+                check_and_send_quota_notifications(pdir, low_quota_groups, threshold_pct=15)
                 self.assertEqual(mock_run.call_count, 1)
                 args, _ = mock_run.call_args
                 cmd = args[0]
@@ -257,10 +267,50 @@ class TestAntigravityScanner(unittest.TestCase):
                 self.assertIn("Weekly Limit (0%)", cmd[8])
                 self.assertIn("5-Hour Limit (2%)", cmd[8])
 
-                # 2. Second run immediately after: cooldown prevents duplicate notification
+                # 2. Second run immediately after: does NOT send duplicate
                 mock_run.reset_mock()
-                check_and_send_quota_notifications(pdir, quota_groups, threshold_pct=15)
+                check_and_send_quota_notifications(pdir, low_quota_groups, threshold_pct=15)
                 self.assertEqual(mock_run.call_count, 0)
+
+                # 3. Third run later while quota remains at 0%: does NOT nag/resend
+                check_and_send_quota_notifications(pdir, low_quota_groups, threshold_pct=15)
+                self.assertEqual(mock_run.call_count, 0)
+
+                # 4. Quota replenishes back to 100%
+                check_and_send_quota_notifications(pdir, healthy_quota_groups, threshold_pct=15)
+                self.assertEqual(mock_run.call_count, 0)
+
+                # 5. Quota drops again in the future: sends 1 notification
+                check_and_send_quota_notifications(pdir, low_quota_groups, threshold_pct=15)
+                self.assertEqual(mock_run.call_count, 1)
+
+    def test_concurrent_quota_notifications(self):
+        """Verify concurrent multi-monitor scans do not send duplicate notifications."""
+        from unittest.mock import patch
+        import concurrent.futures
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pdir = Path(tmpdir)
+            low_quota_groups = [
+                {
+                    "name": "Gemini Models",
+                    "buckets": [
+                        {"id": "gemini-5h", "name": "5-Hour Limit", "remainingPercent": 3},
+                    ]
+                }
+            ]
+
+            with patch("subprocess.run") as mock_run:
+                def run_notify():
+                    check_and_send_quota_notifications(pdir, low_quota_groups, threshold_pct=15)
+
+                # Simulate 8 concurrent monitor bar threads checking quota at the exact same moment
+                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+                    futures = [ex.submit(run_notify) for _ in range(16)]
+                    for fut in futures:
+                        fut.result()
+
+                # Exactly ONE notification must be sent across all concurrent threads
+                self.assertEqual(mock_run.call_count, 1)
 
 
 if __name__ == "__main__":

@@ -1657,7 +1657,7 @@ BarWidget {
 
     SectionCard {
       title: "Refresh Interval"
-      subtitle: "Telemetry and quota polling rate (scales to 3s when active)"
+      subtitle: "Telemetry and quota polling rate (scales to 10s when active)"
 
       ColumnLayout {
         width: parent.width

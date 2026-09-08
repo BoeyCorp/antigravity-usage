@@ -44,7 +44,7 @@ Antigravity active session monitor, prompt metrics, tool telemetry, interactive 
 - **Decoupled Quota Fetching**: Telemetry and popup opens remain instantaneous while quota limits update asynchronously in the background.
 - **Dynamic Configured Model**: Automatically detects default model selection from `~/.gemini/antigravity-cli/settings.json`.
 - **Fast Inode PID Resolution**: O(1) advisory lock lookup via `/proc/locks` for instant session termination (`killSession`).
-- **Adaptive Polling**: Automatically scales refresh frequency from 60s idle down to 3s when an active session is working, then returns to 60s when idle.
+- **Adaptive Polling**: Automatically scales refresh frequency from 60s idle down to 10s when an active session is working, then returns to 60s when idle.
 - **Today & Totals Summary**: Quick stats for prompts today, steps today, and cumulative total prompts.
 - **7-Day Activity Chart**: Daily prompt activity visualization across the past week.
 - **Tool Telemetry Breakdown**: Live call counters for tools (`run_command`, `write_to_file`, `replace_file_content`, `view_file`, `grep_search`, `find_by_name`, `subagents`, etc.).
@@ -145,7 +145,7 @@ Configuration lives in `~/.config/omarchy/shell.json` or can be adjusted directl
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `refreshIntervalSec` | integer (10–1800) | `60` | Telemetry refresh rate in seconds (adaptively scales to 3s when active) |
+| `refreshIntervalSec` | integer (10–1800) | `60` | Telemetry refresh rate in seconds (adaptively scales to 10s when active) |
 | `badgeMode` | enum (`active`, `prompts`, `off`) | `"active"` | Bar badge display mode (`active` sessions count, today's `prompts`, or disabled `off`) |
 | `enableQuotaAlerts` | boolean | `true` | Send desktop notifications when model quota falls below threshold |
 | `quotaAlertThreshold` | integer (5–50) | `15` | Low quota percentage alert threshold |

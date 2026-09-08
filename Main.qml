@@ -20,7 +20,7 @@ Item {
 
     Timer {
         id: autoRefreshTimer
-        interval: (antigravityProvider && antigravityProvider.hasActiveSession) ? 3000 : (root.refreshIntervalSec * 1000)
+        interval: (antigravityProvider && antigravityProvider.hasActiveSession) ? 10000 : (root.refreshIntervalSec * 1000)
         running: true
         repeat: true
         triggeredOnStart: true

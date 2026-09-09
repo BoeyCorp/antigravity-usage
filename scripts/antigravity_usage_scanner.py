@@ -726,8 +726,131 @@ def update_quota_snapshots(base_dir: Path, raw_groups: list[dict[str, Any]]) -> 
     return burn_rates
 
 
+def get_quota_backoff(base_dir: Path) -> tuple[bool, float]:
+    """Check if quota polling is currently throttled due to recent failures.
+    
+    Returns (in_backoff: bool, seconds_remaining: float).
+    """
+    backoff_file = base_dir / "cache" / "quota_backoff.json"
+    if not backoff_file.exists():
+        return False, 0.0
+    try:
+        with open(backoff_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        next_allowed = float(data.get("next_allowed", 0))
+        now = time.time()
+        if now < next_allowed:
+            return True, max(0.0, next_allowed - now)
+    except Exception:
+        pass
+    return False, 0.0
+
+
+def record_quota_failure(base_dir: Path, error_msg: str = "") -> float:
+    """Record a failed quota query and compute next allowed timestamp with exponential backoff."""
+    backoff_file = base_dir / "cache" / "quota_backoff.json"
+    now = time.time()
+    count = 1
+    if backoff_file.exists():
+        try:
+            with open(backoff_file, "r", encoding="utf-8") as f:
+                prev = json.load(f)
+            # If last failure was within the last 15 minutes, increment failure count
+            if now - float(prev.get("last_failure", 0)) < 900:
+                count = int(prev.get("failure_count", 0)) + 1
+        except Exception:
+            pass
+
+    # Exponential backoff: 30s, 60s, 120s, up to max 300s (5 minutes)
+    backoff_seconds = min(300.0, 30.0 * (2.0 ** min(count - 1, 4)))
+    next_allowed = now + backoff_seconds
+    try:
+        backoff_file.parent.mkdir(parents=True, exist_ok=True)
+        tmp = backoff_file.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({
+                "last_failure": now,
+                "failure_count": count,
+                "backoff_seconds": backoff_seconds,
+                "next_allowed": next_allowed,
+                "last_error": sanitize_plain_text(error_msg, 120)
+            }, f)
+        tmp.replace(backoff_file)
+    except Exception:
+        pass
+    return backoff_seconds
+
+
+def record_quota_success(base_dir: Path) -> None:
+    """Clear failure backoff state upon successful quota query."""
+    backoff_file = base_dir / "cache" / "quota_backoff.json"
+    try:
+        backoff_file.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def prune_cli_logs(base_dir: Path, max_logs: int = 30, throttle_seconds: int = 21600) -> int:
+    """Prune obsolete agy CLI log files in base_dir/log, keeping the newest max_logs.
+    
+    Throttled to run at most once per throttle_seconds (default 6 hours).
+    """
+    log_dir = base_dir / "log"
+    if not log_dir.is_dir():
+        return 0
+
+    timestamp_file = base_dir / "cache" / "last_log_prune.timestamp"
+    now = time.time()
+    if timestamp_file.exists():
+        try:
+            if now - timestamp_file.stat().st_mtime < throttle_seconds:
+                return 0
+        except Exception:
+            pass
+
+    try:
+        timestamp_file.parent.mkdir(parents=True, exist_ok=True)
+        timestamp_file.touch()
+    except Exception:
+        pass
+
+    # Preserve the currently linked active log
+    active_log = ""
+    cli_symlink = base_dir / "cli.log"
+    if cli_symlink.is_symlink():
+        try:
+            active_log = cli_symlink.resolve().name
+        except Exception:
+            pass
+
+    try:
+        logs = sorted(log_dir.glob("cli-*.log"), key=lambda p: p.stat().st_mtime)
+        if len(logs) <= max_logs:
+            return 0
+
+        to_keep = set(p.name for p in logs[-max_logs:])
+        if active_log:
+            to_keep.add(active_log)
+
+        deleted = 0
+        for p in logs:
+            if p.name not in to_keep:
+                try:
+                    p.unlink()
+                    deleted += 1
+                except Exception:
+                    pass
+        return deleted
+    except Exception:
+        return 0
+
+
 def trigger_bg_quota_refresh(base_dir: Path, agy_bin: str) -> None:
     """Launch detached background process to refresh quota cache without stalling scans."""
+    in_backoff, _ = get_quota_backoff(base_dir)
+    if in_backoff:
+        return
+
     flag_file = base_dir / "cache" / "quota_refresh.flag"
     now = time.time()
     if flag_file.exists():
@@ -758,7 +881,7 @@ def bg_refresh_quota(base_dir: Path) -> None:
     agy_bin = shutil.which("agy") or str(Path.home() / ".local/bin/agy")
     try:
         res = subprocess.run(
-            [agy_bin, "-p", "/usage", "--output-format", "json"],
+            [agy_bin, "-p", "/usage", "--output-format", "json", "--log-file", "/dev/null"],
             capture_output=True,
             text=True,
             timeout=15
@@ -772,8 +895,11 @@ def bg_refresh_quota(base_dir: Path) -> None:
                     json.dump(cmd_data, f)
                 tmp_cache.replace(cache_path)
                 update_quota_snapshots(base_dir, cmd_data.get("groups", []))
-    except Exception:
-        pass
+                record_quota_success(base_dir)
+                return
+        record_quota_failure(base_dir, res.stderr or res.stdout or f"exit {res.returncode}")
+    except Exception as e:
+        record_quota_failure(base_dir, str(e))
     finally:
         try:
             flag_file.unlink(missing_ok=True)
@@ -782,7 +908,7 @@ def bg_refresh_quota(base_dir: Path) -> None:
 
 
 def fetch_agy_usage_quota(base_dir: Path, force: bool = False) -> dict[str, Any]:
-    """Fetch real-time quota information via `agy -p /usage --output-format json` with caching."""
+    """Fetch real-time quota information via `agy -p /usage --output-format json` with caching and failure backoff."""
     cache_path = base_dir / "cache" / "quota_usage_cache.json"
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     agy_bin = shutil.which("agy") or str(Path.home() / ".local/bin/agy")
@@ -795,17 +921,31 @@ def fetch_agy_usage_quota(base_dir: Path, force: bool = False) -> dict[str, Any]
             with open(cache_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict) and "groups" in data and len(data["groups"]) > 0:
-                    # If cache is older than 180s, trigger detached background refresh
+                    # If cache is older than 180s, trigger detached background refresh (respects backoff)
                     if age > 180:
                         trigger_bg_quota_refresh(base_dir, agy_bin)
                     return data
         except Exception:
             pass
 
-    # 2. Synchronous query (when user explicitly requests force refresh or no cache exists)
+    # 2. If in backoff period and not forcing refresh, do not run synchronous query
+    if not force:
+        in_backoff, _ = get_quota_backoff(base_dir)
+        if in_backoff:
+            if cache_path.exists():
+                try:
+                    with open(cache_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        if isinstance(data, dict) and "groups" in data:
+                            return data
+                except Exception:
+                    pass
+            return {}
+
+    # 3. Synchronous query (when user explicitly requests force refresh, or cache missing and not in backoff)
     try:
         res = subprocess.run(
-            [agy_bin, "-p", "/usage", "--output-format", "json"],
+            [agy_bin, "-p", "/usage", "--output-format", "json", "--log-file", "/dev/null"],
             capture_output=True,
             text=True,
             timeout=12
@@ -819,13 +959,15 @@ def fetch_agy_usage_quota(base_dir: Path, force: bool = False) -> dict[str, Any]
                     with open(tmp_cache, "w", encoding="utf-8") as f:
                         json.dump(cmd_data, f)
                     tmp_cache.replace(cache_path)
+                    record_quota_success(base_dir)
                 except Exception:
                     pass
                 return cmd_data
-    except Exception:
-        pass
+        record_quota_failure(base_dir, res.stderr or res.stdout or f"exit {res.returncode}")
+    except Exception as e:
+        record_quota_failure(base_dir, str(e))
 
-    # 3. Fallback to stale cache if present
+    # 4. Fallback to stale cache if present
     if cache_path.exists():
         try:
             with open(cache_path, "r", encoding="utf-8") as f:
@@ -1146,8 +1288,9 @@ def scan(base_dir: Path, force: bool = False, alert_threshold: int | None = None
     # 0. Read user configured default model from settings.json
     configured_model = read_configured_model(base_dir)
 
-    # 1. Parse Presence Locks (prune stale ones first as housekeeping)
+    # 1. Housekeeping: prune stale presence locks and obsolete CLI logs
     prune_stale_locks(presence_dir)
+    prune_cli_logs(base_dir)
     active_lock_ids = parse_presence(presence_dir)
 
     # 2. Parse History JSONL

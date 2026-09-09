@@ -24,6 +24,10 @@ from antigravity_usage_scanner import (
     normalize_timestamp_seconds,
     parse_transcripts,
     check_and_send_quota_notifications,
+    get_quota_backoff,
+    record_quota_failure,
+    record_quota_success,
+    prune_cli_logs,
 )
 
 
@@ -314,6 +318,50 @@ class TestAntigravityScanner(unittest.TestCase):
 
                 # Exactly ONE notification must be sent across all concurrent threads
                 self.assertEqual(mock_run.call_count, 1)
+
+    def test_quota_failure_backoff(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pdir = Path(tmpdir)
+            # Initially no backoff
+            in_backoff, rem = get_quota_backoff(pdir)
+            self.assertFalse(in_backoff)
+            self.assertEqual(rem, 0.0)
+
+            # Record 1st failure -> 30s backoff
+            b1 = record_quota_failure(pdir, "UNAUTHENTICATED (code 401)")
+            self.assertEqual(b1, 30.0)
+            in_backoff, rem = get_quota_backoff(pdir)
+            self.assertTrue(in_backoff)
+            self.assertGreater(rem, 20.0)
+
+            # Record 2nd failure -> 60s backoff
+            b2 = record_quota_failure(pdir, "UNAUTHENTICATED (code 401)")
+            self.assertEqual(b2, 60.0)
+
+            # Record success -> backoff cleared
+            record_quota_success(pdir)
+            in_backoff, rem = get_quota_backoff(pdir)
+            self.assertFalse(in_backoff)
+            self.assertEqual(rem, 0.0)
+
+    def test_prune_cli_logs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pdir = Path(tmpdir)
+            log_dir = pdir / "log"
+            log_dir.mkdir(parents=True)
+
+            # Create 40 dummy log files
+            for i in range(40):
+                f = log_dir / f"cli-2026090{i:02d}_120000.log"
+                f.write_text("test log")
+                # Ensure different modification times
+                os.utime(f, (1000 + i * 10, 1000 + i * 10))
+
+            # Prune keeping 10 logs (bypassing throttle with throttle_seconds=0)
+            deleted = prune_cli_logs(pdir, max_logs=10, throttle_seconds=0)
+            self.assertEqual(deleted, 30)
+            remaining = list(log_dir.glob("cli-*.log"))
+            self.assertEqual(len(remaining), 10)
 
 
 if __name__ == "__main__":

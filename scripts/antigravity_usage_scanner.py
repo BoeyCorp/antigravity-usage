@@ -1763,7 +1763,7 @@ def scan(base_dir: Path, force: bool = False, alert_threshold: int | None = None
         "quotaUpdatedAt": quota_updated_at,
         "quotaUpdatedMs": quota_updated_ms,
         "lastFullRefreshMs": quota_updated_ms,
-        "usageStatusText": f"{active_status} • {clean_latest_model}",
+        "usageStatusText": active_status,
         "authHelpText": ""
     }
 

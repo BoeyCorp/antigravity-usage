@@ -135,19 +135,22 @@ class TestAntigravityScanner(unittest.TestCase):
             }) + "\n")
 
             # First parse: builds cache
-            tools1, models1, list1, latest1, tokens1 = parse_transcripts(brain_dir, "2026-09-08", ["2026-09-08"], base_dir=pdir)
+            tools1, models1, list1, latest1, tokens1, extra1 = parse_transcripts(brain_dir, "2026-09-08", ["2026-09-08"], base_dir=pdir)
             self.assertEqual(tools1["run_command"], 1)
             self.assertEqual(tokens1.get(latest1), 2000)
             self.assertEqual(list1[0]["todayTokens"], 2000)
+            self.assertEqual(extra1["todayCacheReadTokens"], 300)
+            self.assertGreater(extra1["todayCacheHitRate"], 0)
 
             cache_file = pdir / "cache" / "transcript_stats_cache.json"
             self.assertTrue(cache_file.exists())
 
             # Second parse: reads from cache
-            tools2, models2, list2, latest2, tokens2 = parse_transcripts(brain_dir, "2026-09-08", ["2026-09-08"], base_dir=pdir)
+            tools2, models2, list2, latest2, tokens2, extra2 = parse_transcripts(brain_dir, "2026-09-08", ["2026-09-08"], base_dir=pdir)
             self.assertEqual(tools2["run_command"], 1)
             self.assertEqual(tokens2.get(latest2), 2000)
             self.assertEqual(list2[0]["todayTokens"], 2000)
+            self.assertEqual(extra2["todayCacheReadTokens"], 300)
 
     def test_presence_flock_detection(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -293,13 +296,32 @@ class TestAntigravityScanner(unittest.TestCase):
                 check_and_send_quota_notifications(pdir, low_quota_groups, threshold_pct=15)
                 self.assertEqual(mock_run.call_count, 0)
 
-                # 4. Quota replenishes back to 100%
+                # 4. Quota replenishes back to 100%: sends 1 replenishment alert
                 check_and_send_quota_notifications(pdir, healthy_quota_groups, threshold_pct=15)
-                self.assertEqual(mock_run.call_count, 0)
+                self.assertEqual(mock_run.call_count, 1)
+                self.assertIn("Replenished", mock_run.call_args[0][0][7])
 
                 # 5. Quota drops again in the future: sends 1 notification
+                mock_run.reset_mock()
                 check_and_send_quota_notifications(pdir, low_quota_groups, threshold_pct=15)
                 self.assertEqual(mock_run.call_count, 1)
+
+    def test_group_session_hierarchy(self):
+        from scripts.antigravity_usage_scanner import group_session_hierarchy
+        sessions = [
+            {"conversationId": "parent-1", "title": "Main Project", "isSubagent": False, "parentConversationId": ""},
+            {"conversationId": "sub-1", "title": "Sub Task 1", "isSubagent": True, "parentConversationId": "parent-1"},
+            {"conversationId": "parent-2", "title": "Another Project", "isSubagent": False, "parentConversationId": ""},
+            {"conversationId": "sub-2", "title": "Sub Task 2", "isSubagent": True, "parentConversationId": "parent-1"},
+        ]
+        grouped = group_session_hierarchy(sessions)
+        self.assertEqual(len(grouped), 4)
+        self.assertEqual(grouped[0]["conversationId"], "parent-1")
+        self.assertEqual(grouped[1]["conversationId"], "sub-1")
+        self.assertEqual(grouped[1]["indent"], 1)
+        self.assertEqual(grouped[2]["conversationId"], "sub-2")
+        self.assertEqual(grouped[2]["indent"], 1)
+        self.assertEqual(grouped[3]["conversationId"], "parent-2")
 
     def test_concurrent_quota_notifications(self):
         """Verify concurrent multi-monitor scans do not send duplicate notifications."""

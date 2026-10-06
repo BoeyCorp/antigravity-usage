@@ -126,18 +126,28 @@ class TestAntigravityScanner(unittest.TestCase):
                 "type": "USER_INPUT",
                 "created_at": "2026-09-08T01:00:00Z",
                 "tool_calls": [{"name": "run_command"}]
+            }) + "\n" + json.dumps({
+                "type": "PLANNER_RESPONSE",
+                "created_at": "2026-09-08T01:00:05Z",
+                "input_tokens": 1500,
+                "output_tokens": 200,
+                "cache_read_tokens": 300
             }) + "\n")
 
             # First parse: builds cache
-            tools1, models1, list1, latest1 = parse_transcripts(brain_dir, "2026-09-08", ["2026-09-08"], base_dir=pdir)
+            tools1, models1, list1, latest1, tokens1 = parse_transcripts(brain_dir, "2026-09-08", ["2026-09-08"], base_dir=pdir)
             self.assertEqual(tools1["run_command"], 1)
+            self.assertEqual(tokens1.get(latest1), 2000)
+            self.assertEqual(list1[0]["todayTokens"], 2000)
 
             cache_file = pdir / "cache" / "transcript_stats_cache.json"
             self.assertTrue(cache_file.exists())
 
             # Second parse: reads from cache
-            tools2, models2, list2, latest2 = parse_transcripts(brain_dir, "2026-09-08", ["2026-09-08"], base_dir=pdir)
+            tools2, models2, list2, latest2, tokens2 = parse_transcripts(brain_dir, "2026-09-08", ["2026-09-08"], base_dir=pdir)
             self.assertEqual(tools2["run_command"], 1)
+            self.assertEqual(tokens2.get(latest2), 2000)
+            self.assertEqual(list2[0]["todayTokens"], 2000)
 
     def test_presence_flock_detection(self):
         with tempfile.TemporaryDirectory() as tmpdir:

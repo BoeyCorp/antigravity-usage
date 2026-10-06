@@ -1010,6 +1010,12 @@ BarWidget {
       StatBlock {
         Layout.fillWidth: true
         Layout.preferredWidth: 1
+        value: provider ? usageMain.formatNumber(provider.todayTotalTokens || 0) : "0"
+        label: "tokens today"
+      }
+      StatBlock {
+        Layout.fillWidth: true
+        Layout.preferredWidth: 1
         value: provider ? String(provider.totalPrompts || 0) : "0"
         label: "total prompts"
       }
@@ -1323,7 +1329,9 @@ BarWidget {
                 var p = pCount
                 var s = sCount
                 var sFmt = s >= 1000 ? (s / 1000).toFixed(1) + "k" : String(s)
-                return p + " prompts · " + sFmt + " steps"
+                var tok = modelCardRoot.timeRange === "today" ? Number(modelData.todayTokens || 0) : (modelCardRoot.timeRange === "week" ? Number(modelData.weekTokens || 0) : Number(modelData.tokens || 0))
+                var tFmt = tok > 0 ? (" · " + usageMain.formatNumber(tok) + " tok") : ""
+                return p + " prompts · " + sFmt + " steps" + tFmt
               }
               color: root.dim
               font.family: root.fontFamily
@@ -1852,6 +1860,64 @@ BarWidget {
           font.family: root.fontFamily
           font.pixelSize: 9
           wrapMode: Text.WordWrap
+        }
+      }
+    }
+
+    SectionCard {
+      title: "Live Hook Updates (Instant Refresh)"
+      subtitle: "Push instant updates from Antigravity lifecycle hooks instead of timed polling"
+
+      ColumnLayout {
+        width: parent.width
+        spacing: 8
+
+        Text {
+          textFormat: Text.PlainText
+          Layout.fillWidth: true
+          wrapMode: Text.WordWrap
+          text: {
+            if (!root.provider || !root.provider.hooksKnown) return "Checking…"
+            return root.provider.hooksInstalled
+              ? "Installed — PreInvocation, PostInvocation, and Stop ping this widget the moment they fire."
+              : "Not installed — the widget only updates on its refresh interval."
+          }
+          color: root.dim
+          font.family: root.fontFamily
+          font.pixelSize: 10
+        }
+
+        RowLayout {
+          Layout.fillWidth: true
+          spacing: 8
+
+          Button {
+            text: (root.provider && root.provider.hooksInstalled) ? "Remove hooks" : "Install hooks"
+            foreground: root.foreground
+            tooltipText: (root.provider && root.provider.hooksInstalled)
+              ? "Remove these hook entries from ~/.gemini/config/hooks.json (a backup is written first)"
+              : "Add hook entries to ~/.gemini/config/hooks.json (a backup is written first)"
+            tooltipBackground: root.background
+            tooltipForeground: root.foreground
+            fontFamily: root.fontFamily
+            fontSize: 10
+            horizontalPadding: 8
+            verticalPadding: 4
+            enabled: !!root.provider && !root.provider.hooksBusy
+            onClicked: {
+              if (root.provider.hooksInstalled) root.provider.removeHooks()
+              else root.provider.installHooks()
+            }
+          }
+
+          Text {
+            textFormat: Text.PlainText
+            visible: !!root.provider && root.provider.hooksBusy
+            text: "working…"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: 9
+          }
         }
       }
     }

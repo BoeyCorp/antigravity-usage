@@ -47,6 +47,11 @@ Item {
     property bool hasLocalStats: false
 
     readonly property string scannerScriptPath: pathFromUrl(Qt.resolvedUrl("../scripts/antigravity_usage_scanner.py"))
+    readonly property string hooksScriptPath: pathFromUrl(Qt.resolvedUrl("../scripts/antigravity_usage_hooks.py"))
+
+    property bool hooksInstalled: false
+    property bool hooksKnown: false
+    property bool hooksBusy: false
 
     function pathFromUrl(url) {
         var value = String(url || "")
@@ -165,5 +170,62 @@ Item {
 
         scanner.command = cmd
         scanner.running = true
+    }
+
+    Process {
+        id: hooksProc
+        running: false
+        command: []
+
+        stdout: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: root.applyHooksResult(text)
+        }
+
+        stderr: StdioCollector {
+            waitForEnd: true
+            onStreamFinished: function(text) {
+                if (text && text.trim() !== "")
+                    console.warn("antigravity-usage/hooks", text.trim())
+            }
+        }
+
+        onExited: function(exitCode, exitStatus) {
+            root.hooksBusy = false
+        }
+    }
+
+    function applyHooksResult(content) {
+        try {
+            var data = JSON.parse(String(content || "{}"))
+            root.hooksInstalled = data.installed === true
+            root.hooksKnown = true
+        } catch (e) {
+            console.error("antigravity-usage/hooks", "Failed to parse hooks result:", e)
+        }
+    }
+
+    function runHooksAction(action) {
+        if (hooksProc.running)
+            return
+        root.hooksBusy = true
+        hooksProc.command = ["python3", root.hooksScriptPath, action]
+        hooksProc.running = true
+    }
+
+    function checkHooks() {
+        runHooksAction("status")
+    }
+
+    function installHooks() {
+        runHooksAction("install")
+    }
+
+    function removeHooks() {
+        runHooksAction("remove")
+    }
+
+    Component.onCompleted: {
+        checkHooks()
     }
 }

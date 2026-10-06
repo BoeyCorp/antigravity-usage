@@ -371,13 +371,14 @@ def parse_transcripts(
     recent_dates: list[str] | None = None,
     default_model: str = "Gemini 3.8 Flash (High)",
     base_dir: Path | None = None
-) -> tuple[Counter, dict[str, dict[str, Any]], list[dict[str, Any]], str]:
+) -> tuple[Counter, dict[str, dict[str, Any]], list[dict[str, Any]], str, dict[str, float]]:
     tool_counter: Counter = Counter()
     models_stats: dict[str, dict[str, Any]] = {}
     latest_model = default_model
+    today_tokens_by_model: dict[str, float] = {}
 
     if not brain_dir.exists():
-        return tool_counter, models_stats, [], latest_model
+        return tool_counter, models_stats, [], latest_model, today_tokens_by_model
 
     recent_dates_set = set(recent_dates) if recent_dates else set()
 
@@ -421,15 +422,23 @@ def parse_transcripts(
                 entry_model = cached_entry.get("model", default_model)
                 steps_by_date = cached_entry.get("steps_by_date", {})
                 prompts_by_date = cached_entry.get("prompts_by_date", {})
+                tokens_by_date = cached_entry.get("tokens_by_date", {})
                 total_steps = cached_entry.get("total_steps", 0)
                 total_prompts = cached_entry.get("total_prompts", 0)
+                total_tokens = cached_entry.get("total_tokens", 0)
+                entry_input_tokens = cached_entry.get("input_tokens", 0)
+                entry_output_tokens = cached_entry.get("output_tokens", 0)
             else:
                 entry_tools = Counter()
                 entry_model = default_model
                 steps_by_date = Counter()
                 prompts_by_date = Counter()
+                tokens_by_date = Counter()
                 total_steps = 0
                 total_prompts = 0
+                total_tokens = 0
+                entry_input_tokens = 0
+                entry_output_tokens = 0
 
                 try:
                     with open(p, "r", encoding="utf-8", errors="replace") as f:
@@ -457,6 +466,17 @@ def parse_transcripts(
                             total_steps += 1
                             steps_by_date[step_day] += 1
 
+                            # Token extraction from PLANNER_RESPONSE or steps with token metrics
+                            tok_in = int(step.get("input_tokens") or 0)
+                            tok_out = int(step.get("output_tokens") or 0)
+                            tok_cache = int(step.get("cache_read_tokens") or 0)
+                            turn_tokens = tok_in + tok_out + tok_cache
+                            if turn_tokens > 0:
+                                total_tokens += turn_tokens
+                                entry_input_tokens += tok_in
+                                entry_output_tokens += tok_out
+                                tokens_by_date[step_day] += turn_tokens
+
                             if step.get("type") == "USER_INPUT":
                                 total_prompts += 1
                                 prompts_by_date[step_day] += 1
@@ -479,8 +499,12 @@ def parse_transcripts(
                     "tools": dict(entry_tools),
                     "steps_by_date": dict(steps_by_date),
                     "prompts_by_date": dict(prompts_by_date),
+                    "tokens_by_date": dict(tokens_by_date),
                     "total_steps": total_steps,
-                    "total_prompts": total_prompts
+                    "total_prompts": total_prompts,
+                    "total_tokens": total_tokens,
+                    "input_tokens": entry_input_tokens,
+                    "output_tokens": entry_output_tokens,
                 }
                 cache_dirty = True
 
@@ -499,10 +523,15 @@ def parse_transcripts(
                     "name": entry_model,
                     "prompts": 0,
                     "steps": 0,
+                    "tokens": 0,
+                    "inputTokens": 0,
+                    "outputTokens": 0,
                     "todayPrompts": 0,
                     "todaySteps": 0,
+                    "todayTokens": 0,
                     "weekPrompts": 0,
                     "weekSteps": 0,
+                    "weekTokens": 0,
                     "sessions": set(),
                     "todaySessions": set(),
                     "weekSessions": set()
@@ -520,11 +549,22 @@ def parse_transcripts(
             week_p = sum(prompts_by_date.get(d, 0) for d in recent_dates_set)
             models_stats[entry_model]["weekPrompts"] += week_p
 
+            models_stats[entry_model]["tokens"] += total_tokens
+            models_stats[entry_model]["inputTokens"] += entry_input_tokens
+            models_stats[entry_model]["outputTokens"] += entry_output_tokens
+            today_tok = tokens_by_date.get(today_str, 0)
+            models_stats[entry_model]["todayTokens"] += today_tok
+            week_tok = sum(tokens_by_date.get(d, 0) for d in recent_dates_set)
+            models_stats[entry_model]["weekTokens"] += week_tok
+
             models_stats[entry_model]["sessions"].add(conv_id)
-            if today_s > 0 or today_p > 0:
+            if today_s > 0 or today_p > 0 or today_tok > 0:
                 models_stats[entry_model]["todaySessions"].add(conv_id)
-            if week_s > 0 or week_p > 0:
+            if week_s > 0 or week_p > 0 or week_tok > 0:
                 models_stats[entry_model]["weekSessions"].add(conv_id)
+
+            if today_tok > 0:
+                today_tokens_by_model[entry_model] = today_tokens_by_model.get(entry_model, 0) + today_tok
 
     except Exception:
         pass
@@ -566,23 +606,26 @@ def parse_transcripts(
             "name": clean_model_name,
             "prompts": p_count,
             "steps": s_count,
+            "tokens": data.get("tokens", 0),
             "todayPrompts": data.get("todayPrompts", 0),
             "todaySteps": data.get("todaySteps", 0),
+            "todayTokens": data.get("todayTokens", 0),
             "todaySessions": len(data.get("todaySessions", set())),
             "weekPrompts": data.get("weekPrompts", 0),
             "weekSteps": data.get("weekSteps", 0),
+            "weekTokens": data.get("weekTokens", 0),
             "weekSessions": len(data.get("weekSessions", set())),
             "sessions": len(data["sessions"]),
             "shareFraction": share_frac,
             "sharePercent": share_pct,
             "color": m_color,
-            "inputTokens": 0,
-            "outputTokens": 0
+            "inputTokens": data.get("inputTokens", 0),
+            "outputTokens": data.get("outputTokens", 0),
         }
         formatted_models[clean_model_name] = entry
         model_list.append(entry)
 
-    return tool_counter, formatted_models, model_list, latest_model
+    return tool_counter, formatted_models, model_list, latest_model, today_tokens_by_model
 
 
 def format_hours_duration(hours: float) -> str:
@@ -1297,7 +1340,7 @@ def scan(base_dir: Path, force: bool = False, alert_threshold: int | None = None
     daily_prompts, total_prompts_hist, recent_prompts, ws_counter = parse_history_file(history_path, recent_dates)
 
     # 3. Parse Transcripts for Tool Calls, Models & Model List (cached & incremental)
-    tool_counter, model_usage_dict, model_list, latest_model = parse_transcripts(
+    tool_counter, model_usage_dict, model_list, latest_model, today_tokens_by_model = parse_transcripts(
         brain_dir, today_str, recent_dates, default_model=configured_model, base_dir=base_dir
     )
 
@@ -1543,6 +1586,8 @@ def scan(base_dir: Path, force: bool = False, alert_threshold: int | None = None
     tools_dict = {sanitize_plain_text(k, 80): v for k, v in tool_counter.most_common(10)}
 
     clean_latest_model = sanitize_plain_text(latest_model, 80)
+    today_total_tokens = int(sum(today_tokens_by_model.values()))
+    today_tokens_by_model_clean = {sanitize_plain_text(k, 80): int(v) for k, v in today_tokens_by_model.items()}
 
     quota_cache_path = base_dir / "cache" / "quota_usage_cache.json"
     quota_updated_at = ""
@@ -1569,8 +1614,8 @@ def scan(base_dir: Path, force: bool = False, alert_threshold: int | None = None
         "todayPrompts": daily_prompts.get(today_str, 0),
         "todaySessions": today_db_sessions or (1 if has_active_session else 0),
         "todaySteps": today_db_steps,
-        "todayTotalTokens": 0,
-        "todayTokensByModel": {},
+        "todayTotalTokens": today_total_tokens,
+        "todayTokensByModel": today_tokens_by_model_clean,
         "recentDays": recent_days_data,
         "totalPrompts": total_prompts_hist,
         "totalSessions": total_db_sessions,

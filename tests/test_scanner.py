@@ -307,7 +307,7 @@ class TestAntigravityScanner(unittest.TestCase):
                 self.assertEqual(mock_run.call_count, 1)
 
     def test_group_session_hierarchy(self):
-        from scripts.antigravity_usage_scanner import group_session_hierarchy
+        from antigravity_usage_scanner import group_session_hierarchy
         sessions = [
             {"conversationId": "parent-1", "title": "Main Project", "isSubagent": False, "parentConversationId": ""},
             {"conversationId": "sub-1", "title": "Sub Task 1", "isSubagent": True, "parentConversationId": "parent-1"},
